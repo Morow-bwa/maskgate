@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+from typing import Any
+
+from .anonymizer import MappingItem
+
+
+def rehydrate_text(text: str, mapping: list[MappingItem]) -> str:
+    result = text
+    # Longest first prevents a shorter token from changing a longer one.
+    for item in sorted(
+        (entry for entry in mapping if entry.restore),
+        key=lambda entry: len(entry.replacement),
+        reverse=True,
+    ):
+        result = result.replace(item.replacement, item.original)
+    return result
+
+
+def rehydrate(value: Any, mapping: list[MappingItem]) -> Any:
+    if isinstance(value, str):
+        return rehydrate_text(value, mapping)
+    if isinstance(value, list):
+        return [rehydrate(item, mapping) for item in value]
+    if isinstance(value, dict):
+        return {key: rehydrate(item, mapping) for key, item in value.items()}
+    return value

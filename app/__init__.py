@@ -1,0 +1,1 @@
+"""MaskGate application package."""

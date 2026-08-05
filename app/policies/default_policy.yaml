@@ -1,0 +1,33 @@
+rules:
+  - entity_type: API_KEY
+    action: BLOCK
+
+  - entity_type: CARD_NUMBER
+    action: REDACT
+
+  - entity_type: INN
+    action: MASK
+
+  - entity_type: EMAIL
+    action: MASK
+
+  - entity_type: PHONE
+    action: MASK
+
+  - entity_type: IP_ADDRESS
+    action: MASK
+
+  - entity_type: URL
+    action: MASK
+
+  - entity_type: DOMAIN
+    action: MASK
+
+  - entity_type: FILE_PATH
+    action: MASK
+
+  - entity_type: MONEY
+    action: MASK
+
+  - entity_type: PERSON
+    action: MASK
