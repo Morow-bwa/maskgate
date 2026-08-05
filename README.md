@@ -22,8 +22,8 @@ The local Playground has two modules:
 - **Output** — the exact masked payload, provider response, and locally restored result.
 
 When no provider key is configured, Playground runs in **preview-only mode**:
-it masks the request locally and never calls OpenAI, Gemini, or another
-upstream. This makes the masking flow testable without a provider account.
+it masks the request locally and never calls the configured upstream provider.
+This makes the masking flow testable without a provider account.
 
 ## Run locally
 
@@ -56,18 +56,20 @@ Check the service:
 Invoke-WebRequest http://localhost:8080/health
 ```
 
-## Optional provider call
+## Optional remote provider call
 
-The demo does not need a provider key. To test a real upstream call, put a
-replacement key only in the local, untracked `.env` file:
+The demo does not need a provider key. To test a remote provider with an
+OpenAI-compatible API, put the provider settings only in the local, untracked
+`.env` file:
 
 ```env
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your-replacement-key
-GEMINI_MODEL=gemini-2.5-flash
+LLM_PROVIDER=openai
+LLM_BASE_URL=https://api.example.com/v1
+LLM_API_KEY=your-replacement-key
+LLM_DEFAULT_MODEL=provider-model
 ```
 
-OpenAI-compatible providers use `LLM_PROVIDER=openai` and `LLM_API_KEY`.
+Replace the base URL, key, and model with the remote provider's values.
 Restart the server after changing `.env`. Provider credentials are never part
 of the browser bundle or Playground request.
 
