@@ -35,7 +35,7 @@ jobs:
         run: python -m pip_audit --local
       - name: Verify production lock
         run: |
-          python -m uv pip compile pyproject.toml --extra media --output-file requirements.check.lock
+          python -m uv pip compile pyproject.toml --extra media --universal --output-file requirements.check.lock
           tail -n +3 requirements.lock > /tmp/requirements.expected
           tail -n +3 requirements.check.lock > /tmp/requirements.actual
           diff --strip-trailing-cr /tmp/requirements.expected /tmp/requirements.actual

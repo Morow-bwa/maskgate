@@ -43,7 +43,7 @@ Rate limiting and conversation limits are in-process. The defaults are conservat
 ## Upgrade procedure
 
 1. Review Dependabot and CodeQL results.
-2. Regenerate `requirements.lock` with `python -m uv pip compile pyproject.toml --extra media --output-file requirements.lock`.
+2. Regenerate `requirements.lock` with `python -m uv pip compile pyproject.toml --extra media --universal --output-file requirements.lock`.
 3. Run all commands in the README verification section.
 4. Build and scan the container in CI.
 5. Deploy a new single instance and verify both health endpoints before routing traffic.
