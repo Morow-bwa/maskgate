@@ -91,8 +91,10 @@ def create_app(
     llm_client: Any | None = None,
     ocr_adapter: Any | None = None,
     face_detector: Any | None = None,
+    playground_dir: Path | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
+    playground_dir = playground_dir or PLAYGROUND_DIR
     configure_logging(settings.log_level)
     detector = RegexDetector()
     policy = PolicyEngine(
@@ -892,17 +894,17 @@ def create_app(
     if settings.enable_debug_endpoints:
         app.include_router(build_debug_router(detector, policy, settings.masking_mode))
 
-    if settings.enable_playground and PLAYGROUND_DIR.is_dir():
+    if settings.enable_playground and playground_dir.is_dir():
         app.mount(
             "/playground/assets",
-            StaticFiles(directory=PLAYGROUND_DIR / "assets"),
+            StaticFiles(directory=playground_dir / "assets"),
             name="playground-assets",
         )
 
         @app.get("/playground", include_in_schema=False)
         @app.get("/playground/", include_in_schema=False)
         async def playground() -> FileResponse:
-            return FileResponse(PLAYGROUND_DIR / "index.html")
+            return FileResponse(playground_dir / "index.html")
 
         @app.get("/playground/config", include_in_schema=False)
         async def playground_config() -> dict[str, object]:

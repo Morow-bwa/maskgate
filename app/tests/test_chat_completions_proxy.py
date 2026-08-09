@@ -360,9 +360,9 @@ def test_api_key_policy_blocks_before_upstream(settings) -> None:
     assert upstream.payloads == []
 
 
-def test_playground_preview_does_not_call_unconfigured_provider(settings) -> None:
+def test_playground_preview_does_not_call_unconfigured_provider(settings, playground_dir) -> None:
     unconfigured = replace(settings, llm_provider="openai", llm_api_key="")
-    client = TestClient(create_app(unconfigured))
+    client = TestClient(create_app(unconfigured, playground_dir=playground_dir))
     payload = {
         "model": "gpt-test",
         "messages": [{"role": "user", "content": "Reply to user@example.com"}],
@@ -408,9 +408,9 @@ def test_unsanitized_image_is_blocked_before_upstream(settings) -> None:
     assert upstream.payloads == []
 
 
-def test_blocked_playground_request_shows_preview_but_is_not_sent(settings) -> None:
+def test_blocked_playground_request_shows_preview_but_is_not_sent(settings, playground_dir) -> None:
     upstream = FakeLLMClient()
-    client = TestClient(create_app(settings, llm_client=upstream))
+    client = TestClient(create_app(settings, llm_client=upstream, playground_dir=playground_dir))
     response = client.post(
         "/playground/api/chat",
         json={
@@ -470,8 +470,10 @@ def test_debug_endpoints(settings) -> None:
     )
 
 
-def test_playground_is_served_and_exposes_safe_trace(settings) -> None:
-    client = TestClient(create_app(settings, llm_client=FakeLLMClient()))
+def test_playground_is_served_and_exposes_safe_trace(settings, playground_dir) -> None:
+    client = TestClient(
+        create_app(settings, llm_client=FakeLLMClient(), playground_dir=playground_dir)
+    )
     page = client.get("/playground")
     assert page.status_code == 200
     assert "MaskGate" in page.text
@@ -495,9 +497,11 @@ def test_playground_is_served_and_exposes_safe_trace(settings) -> None:
     assert "@example.test" in provider_text
 
 
-def test_conversation_vault_keeps_masked_history_and_reuses_mapping(settings) -> None:
+def test_conversation_vault_keeps_masked_history_and_reuses_mapping(
+    settings, playground_dir
+) -> None:
     upstream = FakeLLMClient()
-    client = TestClient(create_app(settings, llm_client=upstream))
+    client = TestClient(create_app(settings, llm_client=upstream, playground_dir=playground_dir))
     conversation_id = "conv_test_1234"
 
     first = client.post(

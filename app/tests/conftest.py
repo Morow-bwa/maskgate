@@ -37,3 +37,11 @@ def settings() -> Settings:
         enable_playground=True,
         policy_file=Path(__file__).parents[1] / "policies" / "default_policy.yaml",
     )
+
+
+@pytest.fixture
+def playground_dir(tmp_path: Path) -> Path:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (tmp_path / "index.html").write_text("<title>MaskGate</title>", encoding="utf-8")
+    return tmp_path
