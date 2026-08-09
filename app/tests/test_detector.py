@@ -1,5 +1,4 @@
-from app.masking.detector import RegexDetector, resolve_overlaps
-from app.masking.detector import Entity
+from app.masking.detector import Entity, RegexDetector, resolve_overlaps
 
 
 def test_required_regex_entities_are_detected() -> None:

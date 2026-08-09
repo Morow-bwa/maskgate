@@ -11,19 +11,6 @@ def request_to_payload(request: ChatCompletionRequest) -> dict[str, Any]:
     return request.model_dump(mode="json", exclude_none=False)
 
 
-def mask_payload_messages(payload: dict[str, Any], mask_message: Any) -> None:
-    """Apply a masking callback to text content without dropping SDK fields."""
-    messages = payload.get("messages", [])
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, str):
-            message["content"] = mask_message(content)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
-                    part["text"] = mask_message(part["text"])
-
-
 def add_masking_instruction(payload: dict[str, Any], mappings: Iterable[MappingItem]) -> None:
     """Tell the upstream model how to handle request-scoped masked values.
 
@@ -31,9 +18,9 @@ def add_masking_instruction(payload: dict[str, Any], mappings: Iterable[MappingI
     helps it copy placeholders/surrogates faithfully so the response can be
     rehydrated after the upstream call.
     """
-    replacements = list(dict.fromkeys(
-        item.replacement for item in mappings if item.restore and item.replacement
-    ))
+    replacements = list(
+        dict.fromkeys(item.replacement for item in mappings if item.restore and item.replacement)
+    )
     if not replacements:
         return
 

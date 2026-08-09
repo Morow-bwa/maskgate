@@ -23,7 +23,7 @@ class SafeJsonFormatter(logging.Formatter):
         }
         for key in (
             "request_id",
-            "model",
+            "model_length",
             "masking_mode",
             "detected_entities_count",
             "detected_entity_types",

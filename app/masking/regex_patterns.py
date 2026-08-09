@@ -40,7 +40,9 @@ PATTERNS: tuple[PatternSpec, ...] = (
         EntityType.EMAIL,
         # Allow sentence punctuation after an address; the candidate
         # normalizer removes it without allowing a partial domain match.
-        re.compile(r"(?i)(?<![\w.+-])[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+(?![\w-])"),
+        re.compile(
+            r"(?i)(?<![\w.+-])[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+(?![\w-])"
+        ),
     ),
     PatternSpec(
         EntityType.FILE_PATH,

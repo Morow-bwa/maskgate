@@ -15,7 +15,8 @@ playground-react/node_modules/
 playground-react/dist/
 .pnpm-store/
 .playwright-cli/
-output/playwright/
+output/
+architecture-review-*.html
 *.pem
 *.key
 *.p12

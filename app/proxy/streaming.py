@@ -42,7 +42,7 @@ class StreamingRehydrator:
         self.buffer += text
         hold = self._partial_token_suffix()
         if hold:
-            safe = self.buffer[:-len(hold)]
+            safe = self.buffer[: -len(hold)]
             self.buffer = hold
         else:
             safe = self.buffer

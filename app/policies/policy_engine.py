@@ -42,14 +42,14 @@ class PolicyEngine:
             if value.strip()
         }
         self.public_person_allowlist = {
-            " ".join(value.split()).casefold()
-            for value in public_person_allowlist
-            if value.strip()
+            " ".join(value.split()).casefold() for value in public_person_allowlist if value.strip()
         }
         raw = yaml.safe_load(policy_file.read_text(encoding="utf-8")) or {}
         for rule in raw.get("rules", []):
             try:
-                self.rules[str(rule["entity_type"]).upper()] = PolicyAction(str(rule["action"]).upper())
+                self.rules[str(rule["entity_type"]).upper()] = PolicyAction(
+                    str(rule["action"]).upper()
+                )
             except (KeyError, ValueError):
                 continue
         if not block_api_keys or not block_secrets:
@@ -85,9 +85,13 @@ class PolicyEngine:
 
     def inspect(self, entity_types: list[str]) -> tuple[PolicyAction, list[str]]:
         actions = [self.action_for(entity_type) for entity_type in entity_types]
-        blocked = list(dict.fromkeys(
-            entity_type for entity_type, action in zip(entity_types, actions) if action is PolicyAction.BLOCK
-        ))
+        blocked = list(
+            dict.fromkeys(
+                entity_type
+                for entity_type, action in zip(entity_types, actions)
+                if action is PolicyAction.BLOCK
+            )
+        )
         if blocked:
             return PolicyAction.BLOCK, blocked
         if any(action is PolicyAction.REDACT for action in actions):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -59,15 +60,64 @@ class Settings:
     public_email_allowlist: tuple[str, ...]
     public_email_domain_allowlist: tuple[str, ...]
     public_person_allowlist: tuple[str, ...]
-    debug_masking: bool
     enable_debug_endpoints: bool
-    store_raw_text: bool
     log_level: str
     block_api_keys: bool
     block_secrets: bool
     block_credit_cards: bool
     enable_playground: bool
     policy_file: Path
+    api_keys: tuple[str, ...] = ()
+    max_request_body_bytes: int = 1_048_576
+    rate_limit_requests: int = 60
+    rate_limit_window_seconds: int = 60
+    require_auth: bool = False
+    trusted_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "testserver")
+    max_media_file_bytes: int = 10 * 1024 * 1024
+    media_max_concurrency: int = 2
+    conversation_max_count: int = 1_000
+    max_upstream_response_bytes: int = 8 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if self.is_production and not self.require_auth:
+            raise ValueError("REQUIRE_AUTH must be true in production")
+        if self.require_auth and not self.api_keys:
+            raise ValueError(
+                "MASKGATE_API_KEYS must contain at least one key when REQUIRE_AUTH is enabled"
+            )
+        if self.is_production and self.enable_debug_endpoints:
+            raise ValueError("ENABLE_DEBUG_ENDPOINTS must be false in production")
+        if self.is_production and self.enable_playground:
+            raise ValueError("ENABLE_PLAYGROUND must be false in production")
+        if self.is_production and "*" in self.trusted_hosts:
+            raise ValueError("TRUSTED_HOSTS cannot contain '*' in production")
+        if self.is_production:
+            provider_name = self.llm_provider.strip().casefold()
+            provider_secret = (
+                self.gemini_api_key or self.llm_api_key
+                if provider_name == "gemini"
+                else self.llm_api_key
+            )
+            provider_url = self.gemini_base_url if provider_name == "gemini" else self.llm_base_url
+            if not provider_key_is_configured(provider_secret):
+                raise ValueError("A real provider API key is required in production")
+            parsed = urlsplit(provider_url)
+            if (
+                parsed.scheme.casefold() != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "The production provider URL must be HTTPS without credentials, "
+                    "query, or fragment"
+                )
+
+    @property
+    def is_production(self) -> bool:
+        return self.app_env.strip().casefold() in {"prod", "production"}
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -101,13 +151,27 @@ class Settings:
             public_email_allowlist=_env_list("PUBLIC_EMAIL_ALLOWLIST"),
             public_email_domain_allowlist=_env_list("PUBLIC_EMAIL_DOMAIN_ALLOWLIST"),
             public_person_allowlist=_env_list("PUBLIC_PERSON_ALLOWLIST"),
-            debug_masking=_env_bool("DEBUG_MASKING", False),
             enable_debug_endpoints=_env_bool("ENABLE_DEBUG_ENDPOINTS", False),
-            store_raw_text=_env_bool("STORE_RAW_TEXT", False),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             block_api_keys=_env_bool("BLOCK_API_KEYS", True),
             block_secrets=_env_bool("BLOCK_SECRETS", True),
             block_credit_cards=_env_bool("BLOCK_CREDIT_CARDS", False),
             enable_playground=_env_bool("ENABLE_PLAYGROUND", app_env == "local"),
             policy_file=Path(__file__).parent / "policies" / "default_policy.yaml",
+            api_keys=_env_list("MASKGATE_API_KEYS"),
+            max_request_body_bytes=max(_env_int("MAX_REQUEST_BODY_BYTES", 1_048_576), 1_024),
+            rate_limit_requests=max(_env_int("RATE_LIMIT_REQUESTS", 60), 1),
+            rate_limit_window_seconds=max(_env_int("RATE_LIMIT_WINDOW_SECONDS", 60), 1),
+            require_auth=_env_bool(
+                "REQUIRE_AUTH",
+                app_env.strip().casefold() in {"prod", "production"},
+            ),
+            trusted_hosts=_env_list("TRUSTED_HOSTS") or ("localhost", "127.0.0.1", "testserver"),
+            max_media_file_bytes=max(_env_int("MAX_MEDIA_FILE_BYTES", 10 * 1024 * 1024), 1_024),
+            media_max_concurrency=max(_env_int("MEDIA_MAX_CONCURRENCY", 2), 1),
+            conversation_max_count=max(_env_int("CONVERSATION_MAX_COUNT", 1_000), 1),
+            max_upstream_response_bytes=max(
+                _env_int("MAX_UPSTREAM_RESPONSE_BYTES", 8 * 1024 * 1024),
+                1_024,
+            ),
         )

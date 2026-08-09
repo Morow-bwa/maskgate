@@ -43,6 +43,102 @@ async function loadPlaygroundConfig(signal) {
 
 const playgroundConfigRequest = loadPlaygroundConfig();
 
+function useObjectUrl(blob) {
+  const [url, setUrl] = useState(null);
+
+  useEffect(() => {
+    if (!blob) {
+      setUrl(null);
+      return undefined;
+    }
+    const nextUrl = URL.createObjectURL(blob);
+    setUrl(nextUrl);
+    return () => URL.revokeObjectURL(nextUrl);
+  }, [blob]);
+
+  return url;
+}
+
+function FileAnonymizer() {
+  const [file, setFile] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [result, setResult] = useState(null);
+  const requestInFlightRef = useRef(false);
+  const downloadUrl = useObjectUrl(result?.blob || null);
+
+  async function sanitize(event) {
+    event.preventDefault();
+    if (!file || requestInFlightRef.current) return;
+    requestInFlightRef.current = true;
+    setStatus("running");
+    setResult(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const response = await fetch("/v1/privacy/files/anonymize", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({}));
+        throw new Error(failure?.error?.message || "MaskGate could not sanitize this file");
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") || "";
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "maskgate-output";
+      setResult({
+        blob,
+        filename,
+        redactions: response.headers.get("x-maskgate-redactions") || "0",
+        types: response.headers.get("x-maskgate-entity-types") || "none",
+      });
+      setStatus("complete");
+    } catch (fileError) {
+      setResult({ error: fileError.message });
+      setStatus("error");
+    } finally {
+      requestInFlightRef.current = false;
+    }
+  }
+
+  return (
+    <details className="file-tool">
+      <summary>
+        <span><strong>Sanitize a file</strong><small>DOCX, PDF, or image</small></span>
+        <span>local processing</span>
+      </summary>
+      <form className="file-form" onSubmit={sanitize}>
+        <div>
+          <label htmlFor="privacy-file">Choose a file</label>
+          <input
+            id="privacy-file"
+            type="file"
+            accept=".docx,.pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp"
+            onChange={(event) => {
+              setFile(event.target.files?.[0] || null);
+              setStatus("idle");
+              setResult(null);
+            }}
+          />
+          <p>Text, metadata, links, and detected faces are removed locally. Files are never sent to the LLM provider.</p>
+        </div>
+        <button className="secondary-button" type="submit" disabled={!file || status === "running"}>
+          {status === "running" ? "sanitizing" : "sanitize"}
+        </button>
+      </form>
+      {result?.blob && downloadUrl && (
+        <div className="file-result success" role="status">
+          <span>{result.redactions} redactions / {result.types}</span>
+          <a href={downloadUrl} download={result.filename}>download {result.filename}</a>
+        </div>
+      )}
+      {result?.error && <div className="file-result failure" role="alert">{result.error}</div>}
+    </details>
+  );
+}
+
 function App() {
   const [config, setConfig] = useState({
     provider: "openai",
@@ -303,6 +399,8 @@ function App() {
           {error && <div className="notice error-notice">{error}</div>}
         </article>
       </section>
+
+      <FileAnonymizer />
 
       <footer className="page-footer">
         <span>conversation {conversationId.slice(0, 14)}…</span>

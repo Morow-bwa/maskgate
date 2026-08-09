@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
+import secrets
 from copy import deepcopy
 from dataclasses import dataclass
 
-from app.policies.policy_engine import PolicyAction, PolicyEngine, PolicyBlocked
+from app.policies.policy_engine import PolicyAction, PolicyBlocked, PolicyEngine
 
 from .detector import Entity
 from .surrogate_generator import SurrogateGenerator
@@ -25,11 +27,21 @@ class MappingItem:
 
 
 class MaskingSession:
-    def __init__(self, mode: str, policy: PolicyEngine) -> None:
+    def __init__(
+        self,
+        mode: str,
+        policy: PolicyEngine,
+        *,
+        token_namespace: str | None = None,
+    ) -> None:
         if mode not in {"placeholder", "surrogate", "redact"}:
             raise ValueError(f"Unsupported masking mode: {mode}")
         self.mode = mode
         self.policy = policy
+        namespace = token_namespace or secrets.token_hex(6)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{4,64}", namespace):
+            raise ValueError("Invalid placeholder token namespace")
+        self.token_namespace = namespace
         self.surrogates = SurrogateGenerator()
         self._items: list[MappingItem] = []
         # Deduplicate by the exact value, not by (type, value). The same value
@@ -51,7 +63,9 @@ class MaskingSession:
 
     def _placeholder(self, entity_type: str) -> str:
         self._placeholder_counters[entity_type] = self._placeholder_counters.get(entity_type, 0) + 1
-        return f"<{entity_type}_{self._placeholder_counters[entity_type]}>"
+        return (
+            f"<MG_{self.token_namespace}_{entity_type}_{self._placeholder_counters[entity_type]}>"
+        )
 
     def _replacement(self, entity: Entity, action: PolicyAction) -> MappingItem | None:
         if action is PolicyAction.ALLOW:

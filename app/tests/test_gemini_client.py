@@ -1,8 +1,10 @@
 import asyncio
 
 import httpx
+import pytest
 
 from app.proxy.gemini_client import GeminiClient
+from app.proxy.llm_client import LLMUpstreamError
 
 
 def test_gemini_payload_preserves_system_and_conversation_roles() -> None:
@@ -32,7 +34,11 @@ def test_gemini_response_becomes_openai_compatible() -> None:
                     "finishReason": "STOP",
                 }
             ],
-            "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 4, "totalTokenCount": 7},
+            "usageMetadata": {
+                "promptTokenCount": 3,
+                "candidatesTokenCount": 4,
+                "totalTokenCount": 7,
+            },
         },
         "gemini-2.5-flash",
     )
@@ -58,7 +64,11 @@ def test_gemini_request_keeps_api_key_out_of_url() -> None:
         "local-test-secret",
         transport=httpx.MockTransport(handler),
     )
-    result = asyncio.run(client.complete({"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "Hi"}]}))
+    result = asyncio.run(
+        client.complete(
+            {"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "Hi"}]}
+        )
+    )
     assert result.status_code == 200
     assert seen["key"] == "local-test-secret"
     assert "local-test-secret" not in str(seen["url"])
@@ -69,7 +79,10 @@ def test_gemini_stream_is_converted_to_openai_chunks() -> None:
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
-            text='data: {"candidates":[{"content":{"parts":[{"text":"Hello <EMAIL_1>"}]},"finishReason":"STOP"}]}\n\n',
+            text=(
+                'data: {"candidates":[{"content":{"parts":'
+                '[{"text":"Hello <EMAIL_1>"}]},"finishReason":"STOP"}]}\n\n'
+            ),
             request=request,
         )
 
@@ -90,3 +103,17 @@ def test_gemini_stream_is_converted_to_openai_chunks() -> None:
     events = asyncio.run(collect())
     assert events[0]["object"] == "chat.completion.chunk"
     assert events[0]["choices"][0]["delta"]["content"] == "Hello <EMAIL_1>"
+
+
+def test_gemini_model_cannot_escape_the_models_path() -> None:
+    client = GeminiClient("https://provider.invalid/v1", "provider-key")
+
+    with pytest.raises(LLMUpstreamError, match="unsupported characters"):
+        asyncio.run(
+            client.complete(
+                {
+                    "model": "../../other-endpoint?key=attacker",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                }
+            )
+        )

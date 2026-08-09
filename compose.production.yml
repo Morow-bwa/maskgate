@@ -1,0 +1,42 @@
+services:
+  maskgate:
+    build:
+      context: .
+    image: ${MASKGATE_IMAGE:-maskgate:local}
+    init: true
+    ports:
+      - "${BIND_HOST:-127.0.0.1}:${APP_PORT:-8080}:8080"
+    environment:
+      APP_ENV: production
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8080
+      ENABLE_DEBUG_ENDPOINTS: "false"
+      ENABLE_PLAYGROUND: "false"
+      REQUIRE_AUTH: "true"
+      MASKGATE_API_KEYS: ${MASKGATE_API_KEYS:?set MASKGATE_API_KEYS}
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:?set TRUSTED_HOSTS}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_BASE_URL: ${LLM_BASE_URL:?set LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY:?set LLM_API_KEY}
+      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:?set LLM_DEFAULT_MODEL}
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-60}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: ${MEMORY_LIMIT:-2g}
+    cpus: ${CPU_LIMIT:-2.0}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/live', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    stop_grace_period: 30s
+    restart: unless-stopped

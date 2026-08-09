@@ -1,74 +1,62 @@
-# Security audit
+# Security review
 
-Scope: the FastAPI proxy, the React Playground, local configuration, tests, and
-repository hygiene. This is a review of an educational demo, not a production
-security certification.
+Date: 2026-08-09
+Scope: FastAPI proxy, provider adapters, React Playground, media pipeline, deployment files, dependencies, tests, and repository hygiene.
 
-## Summary
+This is an internal engineering review of an educational project, not a penetration test or certification.
 
-- No user-provided personal data or the previously shared provider key is
-  present in the working tree.
-- All email addresses in fixtures and examples use reserved domains such as
-  `example.com`, `example.org`, `.test`, or `.invalid`.
-- The only `sk-` values are deliberately synthetic `sk-test-*` fixtures used to
-  test detection and masking.
-- `.env`, provider credentials, key files, build output, and local dependency
-  directories are excluded by Git and Docker ignore rules.
+## Resolved high-risk findings
 
-## Findings and changes
+### Outbound data escaped message-only masking
 
-### SEC-01 — accidental unauthenticated upstream request — fixed
+Tool arguments, provider extension fields, and object keys could have bypassed a `messages[].content`-only implementation. MaskGate now recursively sanitizes every outbound string and key at the final provider boundary. Protocol identifiers are inspected and grammar-validated; unsafe values block before HTTP.
 
-The proxy now determines provider readiness before an upstream call
-(`app/main.py:114-117`). Playground requests use a local preview when no real
-provider key is configured (`app/main.py:655-663`), while the public-compatible
-`/v1/chat/completions` route returns `provider_not_configured` instead of
-forwarding an empty Authorization header (`app/main.py:521-531`). This removes
-the confusing upstream authentication error from the demo UI.
+Evidence: tests assert against the serialized body received by `httpx.MockTransport`, including nested metadata and object keys.
 
-### SEC-02 — configuration parser fallback — fixed
+### Missing provider key reached the remote API
 
-Invalid integer environment values now fall back to their defaults and the
-port is clamped to a positive value (`app/config.py:15-27`, `app/config.py:85`).
+Example-like or empty provider credentials now make the service not ready. Playground uses local preview-only mode; the compatible API returns `provider_not_configured`. No unauthenticated upstream request is attempted.
 
-### SEC-03 — debug and secret exposure defaults — fixed
+### Public deployment lacked abuse controls
 
-Debug endpoints are disabled in the example configuration
-(`.env.example:30`). The repository ignores local environment files and common
-credential containers (`.gitignore`, `.dockerignore`). Response headers add
-`nosniff`, `no-referrer`, and `no-store` for API/debug responses
-(`app/main.py:138-144`).
+Production now requires Bearer authentication and explicit trusted hosts, disables Playground/debug routes, and applies constant-time key comparison, canonical-identity rate limiting, request/file limits, security headers, bounded state, and non-forwarding of client authorization.
 
-### SEC-04 — raw-data lifetime — reviewed
+### Conversation state could cross tenant or exhaust memory
 
-Mappings are held in RAM only, are request-scoped, and are deleted after the
-request path completes; the mapping store explicitly does not write mappings
-to disk or logs (`app/storage/mapping_store.py:18-20`, `app/main.py:723-725`).
-Conversation memory is bounded by TTL, message count, and character count.
+Conversation state is keyed by a hash-derived security identity and conversation ID. TTL, message, character, and conversation-count bounds are enforced; capacity exhaustion returns 503 before provider access.
+
+### File support had no privacy-safe boundary
+
+The file endpoint is local-only and fail closed. DOCX archives are checked for traversal, duplicates, expansion size/ratio, active content, and unverifiable embedded objects. PDFs are rebuilt from sanitized pixels. Images burn OCR/face redactions into a metadata-free PNG and are verified again before return.
+
+### Deployment and dependency drift
+
+The production dependency graph is pinned in `requirements.lock`; pnpm has an integrity lock. CI runs lint, tests/coverage, dependency audits, credential-pattern scanning, Chromium smoke, Docker build, and CodeQL. Dependabot covers Python, npm, Docker, and Actions.
+
+The container runs as UID 10001. Production Compose adds a read-only root filesystem, no capabilities, `no-new-privileges`, health checks, and process/resource limits.
 
 ## Residual risks
 
-- The demo has no authentication or rate limiting. Keep it bound to localhost;
-  add an auth layer and network controls before exposing it to a network.
-- Regex masking is not a complete PII detector. Review and extend the patterns
-  and policy for each deployment.
-- Debug endpoints intentionally return detection/mapping details when enabled;
-  only enable them on a trusted local interface.
-- Images, screenshots, and other media are rejected because this demo has no
-  OCR or visual redaction pipeline.
-- `pip-audit` was not available in the local runtime, so Python dependency
-  advisories still need a separate environment check.
-- `pnpm` release-age hardening is set to two days. A stricter `trustPolicy` was
-  tested but rejected the current lockfile's existing transitive dependency;
-  refresh the lockfile before tightening it further.
+- Detector quality is not perfect: regex, OCR, and frontal-face detection can miss sensitive content.
+- Remaining context may enable semantic re-identification even when direct identifiers are masked.
+- RAM-only mappings are visible to a compromised host and disappear on restart.
+- Rate limits and conversations are process-local; one worker is required.
+- The app does not terminate TLS. A reverse proxy and outbound network policy are operator responsibilities.
+- Rasterized PDFs lose search, links, forms, and accessibility structure.
+- DOCX embedded media/objects, audio, video, spreadsheets, and legacy document formats are blocked or unsupported.
+- Docker could not be built in the original Windows development environment because Docker was not installed; CI is the authoritative container build check.
 
-## Verification
+## Verification commands
 
-- `python -m pytest -q` — 38 passed.
-- `pnpm build` — passed.
-- `pnpm audit --prod` — no known vulnerabilities.
-- React Doctor — no React correctness warnings remain; only the pnpm
-  hardening warning described above remains.
-- Repository scan — no matches for the user's supplied names, addresses,
-  identifiers, literal provider credentials, or non-reserved email domains.
-  Detector regex definitions are expected to mention credential formats.
+```powershell
+.\.venv\Scripts\python.exe -m ruff check app scripts
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing
+.\.venv\Scripts\python.exe -m pip_audit --local
+.\.venv\Scripts\python.exe scripts\check_secrets.py --history
+pnpm --dir playground-react build
+pnpm --dir playground-react audit --audit-level high
+```
+
+Local result on 2026-08-09: 69 tests passed, 81.8% branch coverage, React Doctor 100/100, no known Python/npm dependency vulnerabilities, and no credential-pattern or non-reserved-email findings in repository files or reachable Git history.
+
+See [Threat model](docs/THREAT_MODEL.md) and [Privacy guarantees](docs/PRIVACY_GUARANTEES.md) for the exact boundary and non-guarantees.

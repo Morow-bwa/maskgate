@@ -1,33 +1,23 @@
+param(
+  [int]$Port = 8080,
+  [switch]$SkipInstall
+)
+
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location -LiteralPath $projectRoot
+
+if (-not $SkipInstall) {
+  & (Join-Path $projectRoot "scripts\bootstrap.ps1")
+}
+
 $pythonExe = Join-Path $projectRoot ".venv\Scripts\python.exe"
-$bundledPython = "C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
-$pnpmExe = "pnpm"
-$bundledPnpm = "C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd"
-
-if (-not (Test-Path $pythonExe)) {
-  if (Test-Path $bundledPython) {
-    $pythonExe = $bundledPython
-  } else {
-    $pythonExe = "python"
-  }
-}
-if (Test-Path $bundledPnpm) {
-  $pnpmExe = $bundledPnpm
-} else {
-  $pnpmExe = "pnpm"
+if (-not (Test-Path -LiteralPath $pythonExe)) {
+  throw "Python environment is missing. Run without -SkipInstall first."
 }
 
-Set-Location $projectRoot
-
-if (-not (Test-Path ".\playground-react\dist\index.html")) {
-  Push-Location ".\playground-react"
-  & $pnpmExe install
-  & $pnpmExe build
-  Pop-Location
-}
-
-Write-Host "MaskGate Playground: http://localhost:8080/playground" -ForegroundColor Green
-Write-Host "Keep this terminal open. Press Ctrl+C to stop the local proxy." -ForegroundColor DarkGray
-& $pythonExe -m uvicorn app.main:app --host 127.0.0.1 --port 8080
+Write-Host "MaskGate Playground: http://127.0.0.1:$Port/playground" -ForegroundColor Green
+Write-Host "Press Ctrl+C to stop." -ForegroundColor DarkGray
+& $pythonExe -m uvicorn app.main:app --host 127.0.0.1 --port $Port

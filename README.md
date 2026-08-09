@@ -1,134 +1,129 @@
 # MaskGate
 
-> Educational, self-hosted demo of a privacy masking proxy for LLM requests.
+[![CI](https://github.com/Morow-bwa/maskgate/actions/workflows/ci.yml/badge.svg)](https://github.com/Morow-bwa/maskgate/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Morow-bwa/maskgate/actions/workflows/codeql.yml/badge.svg)](https://github.com/Morow-bwa/maskgate/actions/workflows/codeql.yml)
 
-MaskGate shows one concrete flow:
+Self-hosted privacy proxy for remote LLM APIs. MaskGate replaces supported sensitive values locally, sends the sanitized JSON upstream, and restores placeholders in the response without exposing the mapping to the provider.
 
-```text
-local client → MaskGate → masked provider request
-                         ← restored response
-```
-
-It is an exploratory project and a working technical showcase, not a hosted
-service, commercial product, compliance certification, or production promise.
+This is an educational open-source project and technical showcase. It is not a compliance product or a claim that pattern matching can find every kind of personal data.
 
 ![MaskGate Playground](docs/screenshots/playground-preview.png)
 
-## What the demo shows
-
-The local Playground has two modules:
-
-- **Input** — the text entered by the user.
-- **Output** — the exact masked payload, provider response, and locally restored result.
-
-When no provider key is configured, Playground runs in **preview-only mode**:
-it masks the request locally and never calls the configured upstream provider.
-This makes the masking flow testable without a provider account.
-
-## Run locally
-
-Requirements: Python 3.11+, Node.js 22+, and pnpm.
-
-```powershell
-Copy-Item .env.example .env
-
-cd playground-react
-pnpm install
-pnpm build
-cd ..
-
-python -m pip install -e ".[dev]"
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8080
+```text
+client -> auth + limits -> recursive sanitizer -> remote LLM API
+                              |                       |
+                              +-- RAM-only vault <----+
+                                      |
+                                restored response
 ```
 
-Open [http://localhost:8080/playground](http://localhost:8080/playground).
+## What is implemented
 
-On Windows, `./run-playground.ps1` can build the frontend when needed and
-start the local server.
+- OpenAI-compatible `POST /v1/chat/completions`, including streamed responses.
+- Recursive sanitization of the actual outbound payload: messages, tool arguments, extension fields, and object keys.
+- Fail-closed handling for unsafe protocol identifiers, unknown media in chat, detector/policy errors, and malformed files.
+- Request-scoped random placeholders and local response restoration.
+- Multi-turn conversations with bounded, tenant-isolated, RAM-only state.
+- Explicit allowlists for public email addresses, domains, and public person names.
+- Local anonymization endpoint for DOCX, PDF, PNG, JPEG, WEBP, TIFF, and BMP.
+- Minimal Playground showing the input, exact outbound request, provider response, and restored result.
+- Bearer authentication, body limits, rate limiting, trusted hosts, security headers, and production fail-closed settings.
+
+MaskGate targets remote provider APIs. Local models are intentionally out of scope because their prompts already remain inside the operator's own environment.
+
+## Quick start
+
+### Windows
+
+Requires Python 3.12 and Node.js 22 with Corepack or pnpm:
 
 ```powershell
 & .\run-playground.ps1
 ```
 
-Check the service:
+Open [http://127.0.0.1:8080/playground](http://127.0.0.1:8080/playground). The first run creates `.venv`, installs the media stack, and builds the React UI. Later runs can use `-SkipInstall`.
 
-```powershell
-Invoke-WebRequest http://localhost:8080/health
+### Docker
+
+```bash
+docker compose up --build
 ```
 
-## Optional remote provider call
+The local Compose profile binds only to `127.0.0.1` and starts in preview-only mode when no provider credentials are configured.
 
-The demo does not need a provider key. To test a remote provider with an
-OpenAI-compatible API, put the provider settings only in the local, untracked
-`.env` file:
+## Connect a remote provider
+
+Create an untracked `.env` file. Use any remote service that exposes the configured API adapter; the browser never receives this credential.
 
 ```env
 LLM_PROVIDER=openai
 LLM_BASE_URL=https://api.example.com/v1
-LLM_API_KEY=your-replacement-key
+LLM_API_KEY=replace-with-provider-key
 LLM_DEFAULT_MODEL=provider-model
 ```
 
-Replace the base URL, key, and model with the remote provider's values.
-Restart the server after changing `.env`. Provider credentials are never part
-of the browser bundle or Playground request.
+Without a provider key, the Playground still displays the exact sanitized payload but no external request is made. The API endpoint returns `provider_not_configured` instead of forwarding an unauthenticated request.
 
-## Privacy behavior
+Example client request:
 
-1. Validate the incoming OpenAI-compatible request.
-2. Detect supported sensitive values in text content.
-3. Apply the YAML policy.
-4. Replace allowed values with placeholders, surrogates, or redactions.
-5. Send only the masked payload upstream when a provider is configured.
-6. Restore request-scoped values in the provider response locally.
-7. Keep conversation mappings in RAM only, with a bounded TTL and size.
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"provider-model","messages":[{"role":"user","content":"Email billing@example.org"}]}'
+```
 
-API keys are blocked by default. Unsanitized images, screenshots, and other
-media are rejected before an upstream call because this demo has no OCR or
-visual redaction pipeline yet.
+## File anonymization
 
-Supported patterns include email, phone, IPv4, URL, domain, API-key formats,
-file paths, money, card numbers, INN, and conservative Cyrillic person names.
-Regex detection is not a complete privacy guarantee; review the patterns and
-policy for any real deployment.
+Files are processed locally and are never automatically sent to an LLM provider.
 
-## Security defaults
+```bash
+curl -F "file=@document.pdf" \
+  -o document.masked.pdf \
+  http://127.0.0.1:8080/v1/privacy/files/anonymize
+```
 
-- `.env` is ignored by Git and Docker builds.
-- The example configuration leaves provider keys empty.
-- Debug endpoints are disabled in `.env.example`.
-- `/playground` previews locally when the provider is not configured.
-- `/v1/chat/completions` returns `provider_not_configured` instead of making an unauthenticated upstream request.
-- Client `Authorization` headers are not forwarded to the provider.
-- Raw prompts, mappings, provider keys, and authorization headers are not logged.
-- Debug endpoints, when explicitly enabled, must stay on a trusted local interface.
+- DOCX text, split runs, attributes, metadata, comments, and external links are sanitized; active content and embedded media are blocked.
+- PDFs are rasterized page-by-page and rebuilt, removing the original text layer, links, scripts, attachments, and metadata.
+- Images use local OCR and frontal-face detection, burn redactions into pixels, and are exported as metadata-free PNG.
 
-This project has no authentication layer for public exposure. Keep it on
-localhost or add authentication and network controls before using it outside a
-trusted development environment.
+OCR and face detection can miss content. Review sanitized files before high-risk use. Rasterized PDFs lose searchable text and accessibility structure.
 
-See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for the focused review and its
-remaining demo-only risks.
+## Production
+
+Production mode requires inbound auth, explicit trusted hosts, and a configured provider. The Playground and debug endpoints are disabled.
+
+```bash
+cp production.env.example production.env
+# edit every required value
+docker compose --env-file production.env -f compose.production.yml up -d --build
+```
+
+Terminate TLS at a reverse proxy. Keep one application worker: conversation mappings live in process RAM. See [Deployment](docs/DEPLOYMENT.md), [Threat model](docs/THREAT_MODEL.md), and [Privacy guarantees](docs/PRIVACY_GUARANTEES.md).
+
+## Verification
+
+```powershell
+.\.venv\Scripts\python.exe -m ruff check app scripts
+.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing
+.\.venv\Scripts\python.exe -m pip_audit --local
+.\.venv\Scripts\python.exe scripts\check_secrets.py --history
+pnpm --dir playground-react build
+pnpm --dir playground-react audit --audit-level high
+```
+
+The tests include an `httpx.MockTransport` assertion against the serialized outbound HTTP body, not only an intermediate masked object. CI also builds the container, runs a real Chromium smoke test, audits dependencies, scans credential patterns, and runs CodeQL.
+
+Current local verification: 69 tests passed, 81.8% branch coverage, React Doctor 100/100, and no known Python or npm dependency vulnerabilities.
 
 ## Repository map
 
 ```text
-app/                    FastAPI proxy, masking, policy, storage, tests
-playground-react/       React/Vite diagnostic interface
-examples/               OpenAI-compatible Python and Node examples
-run-playground.ps1      Windows local runner
+app/                    FastAPI proxy, masking, media pipeline, tests
+playground-react/       React/Vite inspection UI
+scripts/                bootstrap, browser smoke, secret scan
+docs/                   threat model, deployment, privacy decisions
+Dockerfile              non-root production image
+compose.production.yml  hardened single-instance deployment
 ```
-
-## Tests
-
-```powershell
-python -m pytest -q
-```
-
-The suite covers masking, overlap resolution, policy blocks, rehydration,
-streaming, conversations, media fail-closed behavior, preview-only mode, and
-configuration parsing.
-
-## License
 
 Apache-2.0. See [LICENSE](LICENSE).

@@ -1,5 +1,9 @@
 allowBuilds:
   esbuild: true
+blockExoticSubdeps: true
 onlyBuiltDependencies:
   - esbuild
 minimumReleaseAge: 2880
+overrides:
+  nanoid@<3.3.17: 3.3.17
+trustPolicy: no-downgrade
