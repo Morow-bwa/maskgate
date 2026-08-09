@@ -1,4 +1,4 @@
-FROM node:22-alpine AS playground-build
+FROM node:26-alpine AS playground-build
 
 WORKDIR /frontend
 
