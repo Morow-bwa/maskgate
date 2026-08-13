@@ -14,6 +14,9 @@ certified DLP product and it does not claim perfect PII detection.
    text and tool arguments until complete.
 6. Unknown encoded content, numeric user data, unsupported media, malformed output, and unsafe
    provider extensions fail closed on documented paths.
+7. Ingress, final-wire, and output boundaries implement one provider-independent
+   `PrivacyDetector` contract. Startup rejects terminal detectors with weaker profiles, thresholds,
+   semantics, recognizers, or entity coverage.
 
 ## Architectural vocabulary
 
@@ -43,7 +46,7 @@ Client
   -> sealed PrivacyCheckedPayload bytes
   -> built-in remote transport
   -> bounded and validated provider response / SSE
-  -> OutputPrivacyGuard
+  -> OutputPrivacyGuard (literal, token, and encoded-view inspection)
   -> authorized field-scoped rehydration
   -> Client
 ```
@@ -94,10 +97,11 @@ stored before rehydration.
 
 ## Provider independence
 
-The public route is OpenAI Chat Completions compatible. Runtime OpenAI-compatible Chat and Gemini
-`generateContent` paths have exact serialized-body tests. Responses, Anthropic, and Gemini
-Interactions Adapters are library-level until their response/transport integrations are complete.
-See `PROVIDERS.md`.
+The public routes are OpenAI Chat Completions compatible and expose a reviewed non-stream OpenAI
+Responses subset. Runtime OpenAI-compatible Chat, Gemini `generateContent`, and OpenAI Responses
+paths have exact serialized-body tests. Anthropic Messages and Gemini Interactions remain
+library-level Adapters until their response/transport integrations are complete. See
+`PROVIDERS.md`.
 
 ## Vault and tenancy
 
@@ -105,7 +109,8 @@ The current vault Implementation is single-process RAM. Principal namespaces are
 credentials without storing the credential. The same conversation ID under two credentials creates
 two isolated states. Mapping budgets, TTL, explicit deletion, and reference pruning minimize data.
 
-A future distributed vault requires authenticated encryption, tenant key separation, expiry,
+A tenant-scoped internal delete primitive removes all conversations and mappings owned by one
+pseudonymous principal scope. A future distributed vault requires authenticated encryption, tenant key separation, expiry,
 replay controls, bounded indexes, and a revised threat model. Plaintext Redis mappings are not an
 acceptable Implementation.
 
@@ -118,8 +123,9 @@ rejects opaque package content. OCR and face detection remain best effort and lo
 ## Privacy-safe observability
 
 The in-memory metrics Interface accepts enumerated metric/stage names and bounded taxonomy labels
-only. It cannot receive raw prompts, sensitive values, model IDs, credentials, mappings, file paths,
-or arbitrary labels.
+only. Structured logs apply field-specific primitive grammars and never stringify arbitrary extra
+objects. Neither surface can receive raw prompts, sensitive values, model IDs, credentials,
+mappings, file paths, or arbitrary labels.
 
 ## Deployment
 

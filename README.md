@@ -23,11 +23,15 @@ client <- authorized restore <- output privacy guard <----------+
 ## Implemented
 
 - OpenAI-compatible `POST /v1/chat/completions`, including strict buffered streaming.
+- OpenAI Responses `POST /v1/responses` non-stream runtime with stateless `store: false`, local
+  function tools, strict typed output validation, and safe response projection.
 - Runtime provider paths for OpenAI-compatible Chat and Gemini `generateContent`.
-- Canonical Privacy IR plus tested library Adapters for OpenAI Responses, Anthropic Messages, and
-  experimental Gemini Interactions.
+- Canonical Privacy IR plus tested library Adapters for Anthropic Messages and experimental Gemini
+  Interactions; these two adapters are not public runtime routes yet.
 - Bounded Unicode canonicalization, pluggable recognizers, checksum validators, strict detector
   profiles, deterministic privacy risk, and contextual Policy v2.
+- Local deterministic compound quasi-identifier findings plus policy-gated age/date generalization
+  candidates; this API is advisory and does not claim semantic anonymity.
 - Random opaque tokens, bijective bounded RAM vault, conversation mapping pruning, and
   credential-derived principal isolation.
 - Recursive transformation of messages, object keys, metadata, tool definitions/arguments/results,
