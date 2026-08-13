@@ -54,9 +54,7 @@ def _sanitize_value(
     mask_text_at_path: MaskTextAtPath | None,
 ) -> Any:
     transform = (
-        (lambda text: mask_text_at_path(text, path))
-        if mask_text_at_path is not None
-        else mask_text
+        (lambda text: mask_text_at_path(text, path)) if mask_text_at_path is not None else mask_text
     )
     if isinstance(value, str):
         if _is_protocol_string(path):

@@ -19,9 +19,7 @@ from app.privacy.risk import PrivacyRiskEngine
 from app.privacy.runtime import PrivacyRequestContext, PrivacyRuntime
 from app.privacy.wire import FinalWirePrivacyGuard
 
-SYNTHETIC_TEXT = (
-    "Please contact synthetic.user@example.org or +1 202 555 0147 about the fixture."
-)
+SYNTHETIC_TEXT = "Please contact synthetic.user@example.org or +1 202 555 0147 about the fixture."
 
 
 def _measure(operation: Callable[[], object], iterations: int) -> dict[str, float]:

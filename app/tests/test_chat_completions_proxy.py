@@ -78,9 +78,7 @@ class ToolHistoryLLMClient:
                                         "type": "function",
                                         "function": {
                                             "name": "send_email",
-                                            "arguments": json.dumps(
-                                                {"recipient": token.group(0)}
-                                            ),
+                                            "arguments": json.dumps({"recipient": token.group(0)}),
                                         },
                                     }
                                 ],
@@ -104,9 +102,7 @@ class ToolHistoryLLMClient:
         )
 
 
-def test_scoped_public_assertion_allows_only_the_matching_principal(
-    settings, tmp_path
-) -> None:
+def test_scoped_public_assertion_allows_only_the_matching_principal(settings, tmp_path) -> None:
     first_key = "tenant-a-key"
     first_principal = DefaultPrincipalResolver(settings.application_id).resolve(
         authorization=f"Bearer {first_key}",
@@ -187,9 +183,7 @@ def test_conversation_history_preserves_safe_tool_calls_without_originals(settin
         json={
             "model": "gpt-test",
             "conversation_id": conversation_id,
-            "messages": [
-                {"role": "user", "content": "Email owner@example.com using the tool"}
-            ],
+            "messages": [{"role": "user", "content": "Email owner@example.com using the tool"}],
         },
     )
     second = client.post(
@@ -203,8 +197,9 @@ def test_conversation_history_preserves_safe_tool_calls_without_originals(settin
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert "owner@example.com" in (
-        first.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+    assert (
+        "owner@example.com"
+        in (first.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"])
     )
     second_wire = upstream.payloads[1]
     assistant = next(
@@ -536,9 +531,7 @@ def test_reserved_token_injection_blocks_before_upstream(settings) -> None:
         "/v1/chat/completions",
         json={
             "model": "gpt-test",
-            "messages": [
-                {"role": "user", "content": "Replay <MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"}
-            ],
+            "messages": [{"role": "user", "content": "Replay <MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"}],
         },
     )
 

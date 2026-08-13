@@ -90,10 +90,10 @@ class InMemoryVault:
             if item.restore and reverse is not None and reverse.original != item.original:
                 raise VaultCollision
             sensitive_bytes = len(item.original.encode("utf-8"))
-            if (
-                len(self._items) >= max(self.budget.max_mappings, 1)
-                or self._sensitive_bytes + sensitive_bytes
-                > max(self.budget.max_sensitive_bytes, 1_024)
+            if len(self._items) >= max(
+                self.budget.max_mappings, 1
+            ) or self._sensitive_bytes + sensitive_bytes > max(
+                self.budget.max_sensitive_bytes, 1_024
             ):
                 raise VaultCapacityExceeded
             self._items.append(item)
@@ -113,9 +113,7 @@ class InMemoryVault:
             self._items = retained
             self._by_original = {item.original: item for item in retained}
             self._by_replacement = {item.replacement: item for item in retained}
-            self._sensitive_bytes = sum(
-                len(item.original.encode("utf-8")) for item in retained
-            )
+            self._sensitive_bytes = sum(len(item.original.encode("utf-8")) for item in retained)
 
     def __deepcopy__(self, memo: dict[int, Any]) -> InMemoryVault:
         with self._lock:

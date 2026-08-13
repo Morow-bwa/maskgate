@@ -72,9 +72,7 @@ class DefaultPrincipalResolver:
         if authorization:
             scheme, separator, token = authorization.partition(" ")
             secret = (
-                token
-                if separator and scheme.casefold() == "bearer" and token
-                else authorization
+                token if separator and scheme.casefold() == "bearer" and token else authorization
             )
             fingerprint = _digest(secret)
             return PrincipalContext(
