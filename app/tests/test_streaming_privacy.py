@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from app.masking.anonymizer import MappingItem
-from app.masking.detector import RegexDetector
+from app.privacy.detection import DetectorEnsemble
+from app.privacy.models import DetectorProfile
 from app.privacy.output_guard import OutputPrivacyGuard
 from app.proxy.streaming import BufferedStreamingOutputGuard
 
@@ -10,7 +11,9 @@ TOKEN = "<MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"
 
 def test_streaming_buffers_all_choices_and_tool_arguments_until_inspected() -> None:
     mapping = [MappingItem("EMAIL", "owner@example.com", TOKEN)]
-    guard = BufferedStreamingOutputGuard(OutputPrivacyGuard(RegexDetector()), mapping)
+    guard = BufferedStreamingOutputGuard(
+        OutputPrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT)), mapping
+    )
 
     first = guard.push(
         {
@@ -34,9 +37,7 @@ def test_streaming_buffers_all_choices_and_tool_arguments_until_inspected() -> N
                 {
                     "index": 1,
                     "delta": {
-                        "tool_calls": [
-                            {"index": 0, "function": {"arguments": 'example.net"}'}}
-                        ]
+                        "tool_calls": [{"index": 0, "function": {"arguments": 'example.net"}'}}]
                     },
                 },
             ]
@@ -55,7 +56,9 @@ def test_streaming_restores_opaque_token_at_every_split_boundary() -> None:
     mapping = [MappingItem("EMAIL", "owner@example.com", TOKEN)]
 
     for split in range(1, len(TOKEN)):
-        guard = BufferedStreamingOutputGuard(OutputPrivacyGuard(RegexDetector()), mapping)
+        guard = BufferedStreamingOutputGuard(
+            OutputPrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT)), mapping
+        )
         guard.push({"choices": [{"index": 0, "delta": {"content": TOKEN[:split]}}]})
         guard.push({"choices": [{"index": 0, "delta": {"content": TOKEN[split:]}}]})
         events = guard.finish_events()

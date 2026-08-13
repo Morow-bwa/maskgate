@@ -6,7 +6,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from app.privacy.detection import DetectorEnsemble, LegacyEntityDetectorAdapter
+from app.privacy.detection import DetectorEnsemble
 from app.privacy.models import DetectorProfile
 from app.privacy.wire import FinalWirePrivacyGuard, PrivacyCheckedPayload
 
@@ -22,6 +22,24 @@ class LLMUpstreamError(Exception):
         self.error_type = error_type
         self.message = message
         super().__init__(message)
+
+
+_PUBLIC_UPSTREAM_MESSAGES = {
+    "invalid_model": "The provider model is invalid",
+    "upstream_error": "The upstream provider rejected the request",
+    "upstream_invalid_response": "The upstream LLM returned an invalid response",
+    "upstream_invalid_stream": "The upstream LLM returned an invalid stream",
+    "upstream_response_too_large": "The upstream LLM response exceeded the configured size limit",
+    "upstream_timeout": "The upstream LLM request timed out",
+    "upstream_unavailable": "The upstream LLM is unavailable",
+}
+
+
+def public_upstream_error(error_type: str) -> tuple[str, str]:
+    """Return a bounded client-safe error without reflecting provider text."""
+
+    safe_type = error_type if error_type in _PUBLIC_UPSTREAM_MESSAGES else "upstream_error"
+    return safe_type, _PUBLIC_UPSTREAM_MESSAGES[safe_type]
 
 
 async def read_bounded_json(response: httpx.Response, max_bytes: int) -> Any:
@@ -125,18 +143,14 @@ class LLMClient:
         # Direct library callers still receive the same final guard. Application
         # flows prepare their checked payload with the request vault so known
         # opaque tokens can be approved explicitly.
-        detector = LegacyEntityDetectorAdapter(
-            DetectorEnsemble(profile=DetectorProfile.STRICT)
-        )
+        detector = DetectorEnsemble(profile=DetectorProfile.STRICT)
         return FinalWirePrivacyGuard(detector).check(
             provider="openai-compatible-chat",
             target="/chat/completions",
             payload=payload,
         )
 
-    async def complete(
-        self, payload: PrivacyCheckedPayload | dict[str, Any]
-    ) -> UpstreamResult:
+    async def complete(self, payload: PrivacyCheckedPayload | dict[str, Any]) -> UpstreamResult:
         checked = self._checked(payload)
         headers = {"Content-Type": "application/json"}
         if self.api_key:

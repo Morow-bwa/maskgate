@@ -16,6 +16,8 @@ from app.masking.detector import RegexDetector
 from app.masking.rehydrator import rehydrate
 from app.masking.surrogate_generator import SurrogateGenerator
 from app.policies.policy_engine import PolicyEngine
+from app.privacy.detection import DetectorEnsemble
+from app.privacy.models import DetectorProfile
 from app.privacy.output_guard import OutputPrivacyGuard
 from app.privacy.vault import InMemoryVault, VaultBudget
 from app.privacy.wire import FinalWirePrivacyGuard, WirePrivacyViolation
@@ -67,14 +69,12 @@ def test_vault_deepcopy_has_independent_lock_and_indexes() -> None:
 
 
 def test_final_wire_guard_checks_exact_serialized_body() -> None:
-    guard = FinalWirePrivacyGuard(RegexDetector())
+    guard = FinalWirePrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT))
 
     checked = guard.check(
         provider="openai-chat",
         payload={
-            "messages": [
-                {"role": "user", "content": "Hello <MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"}
-            ]
+            "messages": [{"role": "user", "content": "Hello <MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"}]
         },
         approved_tokens={"<MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"},
     )
@@ -84,7 +84,7 @@ def test_final_wire_guard_checks_exact_serialized_body() -> None:
 
 
 def test_final_wire_guard_rejects_raw_pii_and_injected_tokens() -> None:
-    guard = FinalWirePrivacyGuard(RegexDetector())
+    guard = FinalWirePrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT))
 
     with pytest.raises(WirePrivacyViolation, match="EMAIL"):
         guard.check(
@@ -94,7 +94,7 @@ def test_final_wire_guard_rejects_raw_pii_and_injected_tokens() -> None:
 
 
 def test_final_wire_guard_rejects_reversibly_encoded_content() -> None:
-    guard = FinalWirePrivacyGuard(RegexDetector())
+    guard = FinalWirePrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT))
     encoded = base64.b64encode(b"alice@example.com").decode("ascii")
 
     with pytest.raises(WirePrivacyViolation, match="unsupported encoded content"):
@@ -105,7 +105,7 @@ def test_final_wire_guard_rejects_reversibly_encoded_content() -> None:
 
 
 def test_final_wire_guard_rejects_unclassified_numeric_data() -> None:
-    guard = FinalWirePrivacyGuard(RegexDetector())
+    guard = FinalWirePrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT))
 
     with pytest.raises(WirePrivacyViolation, match="unclassified numeric"):
         guard.check(
@@ -133,7 +133,7 @@ def test_final_wire_guard_rejects_unclassified_numeric_data() -> None:
 
 
 def test_output_guard_redacts_new_provider_pii_before_authorized_rehydration() -> None:
-    guard = OutputPrivacyGuard(RegexDetector())
+    guard = OutputPrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT))
     mapping = [MappingItem("EMAIL", "owner@example.com", "<MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>")]
     provider_response = {
         "choices": [
@@ -156,7 +156,7 @@ def test_output_guard_redacts_new_provider_pii_before_authorized_rehydration() -
 
 
 def test_output_guard_never_restores_tokens_in_provider_metadata() -> None:
-    guard = OutputPrivacyGuard(RegexDetector())
+    guard = OutputPrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT))
     mapping = [MappingItem("EMAIL", "owner@example.com", "<MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>")]
 
     guarded = guard.process(

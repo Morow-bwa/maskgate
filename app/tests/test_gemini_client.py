@@ -3,7 +3,8 @@ import asyncio
 import httpx
 import pytest
 
-from app.masking.detector import RegexDetector
+from app.privacy.detection import DetectorEnsemble
+from app.privacy.models import DetectorProfile
 from app.privacy.wire import FinalWirePrivacyGuard
 from app.proxy.gemini_client import GeminiClient
 from app.proxy.llm_client import LLMUpstreamError
@@ -99,7 +100,7 @@ def test_gemini_transport_sends_only_post_adapter_checked_bytes() -> None:
             "messages": [{"role": "user", "content": f"Email {token}"}],
         }
     )
-    checked = FinalWirePrivacyGuard(RegexDetector()).check(
+    checked = FinalWirePrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT)).check(
         provider=provider,
         target=target,
         payload=body,
