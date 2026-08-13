@@ -8,6 +8,7 @@ from app.policies.policy_engine import PolicyBlocked
 
 PathPart = str | int
 MaskText = Callable[[str], str]
+MaskTextAtPath = Callable[[str, tuple[PathPart, ...]], str]
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 
@@ -25,6 +26,7 @@ def sanitize_outbound_payload(
     mask_text: MaskText,
     *,
     validate_protocol: bool = True,
+    mask_text_at_path: MaskTextAtPath | None = None,
 ) -> dict[str, Any]:
     """Return a recursively sanitized copy of an OpenAI-compatible payload.
 
@@ -32,7 +34,13 @@ def sanitize_outbound_payload(
     protocol identifier. Unknown extension fields are therefore sanitized by
     default instead of passing through untouched.
     """
-    sanitized = _sanitize_value(payload, mask_text, (), validate_protocol)
+    sanitized = _sanitize_value(
+        payload,
+        mask_text,
+        (),
+        validate_protocol,
+        mask_text_at_path,
+    )
     if not isinstance(sanitized, dict):  # Defensive invariant for type checkers and callers.
         raise TypeError("outbound payload must be an object")
     return sanitized
@@ -43,25 +51,43 @@ def _sanitize_value(
     mask_text: MaskText,
     path: tuple[PathPart, ...],
     validate_protocol: bool,
+    mask_text_at_path: MaskTextAtPath | None,
 ) -> Any:
+    transform = (
+        (lambda text: mask_text_at_path(text, path))
+        if mask_text_at_path is not None
+        else mask_text
+    )
     if isinstance(value, str):
         if _is_protocol_string(path):
-            masked_value = mask_text(value)
+            masked_value = transform(value)
             if not validate_protocol:
                 return masked_value
             if masked_value != value or not _is_valid_protocol_string(path, value):
                 raise UnsafeProtocolString(path)
             return value
-        return mask_text(value)
+        return transform(value)
     if isinstance(value, list):
         return [
-            _sanitize_value(item, mask_text, (*path, index), validate_protocol)
+            _sanitize_value(
+                item,
+                mask_text,
+                (*path, index),
+                validate_protocol,
+                mask_text_at_path,
+            )
             for index, item in enumerate(value)
         ]
     if isinstance(value, dict):
         sanitized_dict: dict[Any, Any] = {}
         for key, item in value.items():
-            sanitized_key = mask_text(key) if isinstance(key, str) else key
+            sanitized_key = (
+                mask_text_at_path(key, (*path, "<key>"))
+                if isinstance(key, str) and mask_text_at_path is not None
+                else mask_text(key)
+                if isinstance(key, str)
+                else key
+            )
             if sanitized_key in sanitized_dict:
                 # Irreversible redaction can map distinct sensitive keys to the
                 # same value. Preserve both without exposing either original.
@@ -75,6 +101,7 @@ def _sanitize_value(
                 mask_text,
                 (*path, key),
                 validate_protocol,
+                mask_text_at_path,
             )
         return sanitized_dict
     return value

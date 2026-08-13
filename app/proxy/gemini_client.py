@@ -8,13 +8,19 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from .llm_client import LLMUpstreamError, UpstreamResult, bounded_sse_lines, read_bounded_json
+from app.privacy.detection import DetectorEnsemble, LegacyEntityDetectorAdapter
+from app.privacy.models import DetectorProfile
+from app.privacy.wire import FinalWirePrivacyGuard, PrivacyCheckedPayload
+
+from .llm_client import LLMUpstreamError, UpstreamResult, bounded_sse_data, read_bounded_json
 
 MODEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 class GeminiClient:
     """Native Gemini generateContent adapter behind the OpenAI-compatible proxy."""
+
+    accepts_privacy_checked_payload = True
 
     def __init__(
         self,
@@ -119,9 +125,45 @@ class GeminiClient:
             },
         }
 
-    async def complete(self, payload: dict[str, Any]) -> UpstreamResult:
+    def prepare_request(
+        self, payload: dict[str, Any], *, stream: bool = False
+    ) -> tuple[str, str, dict[str, Any]]:
         model = self._normalized_model(payload.get("model"))
-        url = f"{self.base_url}/models/{model}:generateContent"
+        operation = "streamGenerateContent?alt=sse" if stream else "generateContent"
+        return (
+            "gemini-generate-content",
+            f"/models/{model}:{operation}",
+            self.to_gemini_payload(payload),
+        )
+
+    def _checked(
+        self, payload: PrivacyCheckedPayload | dict[str, Any], *, stream: bool
+    ) -> PrivacyCheckedPayload:
+        if isinstance(payload, PrivacyCheckedPayload):
+            return payload
+        provider, target, body = self.prepare_request(payload, stream=stream)
+        detector = LegacyEntityDetectorAdapter(
+            DetectorEnsemble(profile=DetectorProfile.STRICT)
+        )
+        return FinalWirePrivacyGuard(detector).check(
+            provider=provider,
+            target=target,
+            payload=body,
+        )
+
+    @staticmethod
+    def _model_from_target(target: str) -> str:
+        marker = "/models/"
+        if marker not in target or ":" not in target:
+            raise LLMUpstreamError("invalid_model", "The checked Gemini target is invalid")
+        return target.split(marker, 1)[1].split(":", 1)[0]
+
+    async def complete(
+        self, payload: PrivacyCheckedPayload | dict[str, Any]
+    ) -> UpstreamResult:
+        checked = self._checked(payload, stream=False)
+        model = self._model_from_target(checked.target)
+        url = f"{self.base_url}{checked.target}"
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             # Header form avoids putting the secret in URLs, access logs, or traces.
@@ -131,7 +173,7 @@ class GeminiClient:
                 timeout=self.timeout_seconds, transport=self.transport
             ) as client:
                 async with client.stream(
-                    "POST", url, headers=headers, json=self.to_gemini_payload(payload)
+                    "POST", url, headers=headers, content=checked.body
                 ) as response:
                     response_payload = await read_bounded_json(response, self.max_response_bytes)
                     status_code = response.status_code
@@ -150,9 +192,12 @@ class GeminiClient:
             return UpstreamResult(status_code, response_payload)
         return UpstreamResult(status_code, self.from_gemini_response(response_payload, model))
 
-    async def complete_stream(self, payload: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        model = self._normalized_model(payload.get("model"))
-        url = f"{self.base_url}/models/{model}:streamGenerateContent?alt=sse"
+    async def complete_stream(
+        self, payload: PrivacyCheckedPayload | dict[str, Any]
+    ) -> AsyncIterator[dict[str, Any]]:
+        checked = self._checked(payload, stream=True)
+        model = self._model_from_target(checked.target)
+        url = f"{self.base_url}{checked.target}"
         headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
         if self.api_key:
             headers["x-goog-api-key"] = self.api_key
@@ -165,22 +210,26 @@ class GeminiClient:
                     "POST",
                     url,
                     headers=headers,
-                    json=self.to_gemini_payload(payload),
+                    content=checked.body,
                 ) as response:
                     if response.is_error:
                         raise LLMUpstreamError(
                             "upstream_error",
                             "The upstream Gemini service rejected the streaming request",
                         )
-                    async for line in bounded_sse_lines(response, self.max_response_bytes):
-                        if not line.startswith("data:"):
-                            continue
+                    async for data in bounded_sse_data(response, self.max_response_bytes):
                         try:
-                            chunk = json.loads(line[5:].strip())
-                        except json.JSONDecodeError:
-                            continue
+                            chunk = json.loads(data.strip())
+                        except json.JSONDecodeError as exc:
+                            raise LLMUpstreamError(
+                                "upstream_invalid_stream",
+                                "The upstream Gemini service returned malformed SSE JSON",
+                            ) from exc
                         if not isinstance(chunk, dict):
-                            continue
+                            raise LLMUpstreamError(
+                                "upstream_invalid_stream",
+                                "The upstream Gemini service returned an invalid SSE event",
+                            )
                         candidates = chunk.get("candidates") or []
                         candidate = candidates[0] if candidates else {}
                         content = candidate.get("content") or {}

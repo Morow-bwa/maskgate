@@ -1,0 +1,7 @@
+{"id":"ru-inn-valid","locale":"ru-RU","text":"ИНН организации: 7707083893.","entities":[{"type":"INN","value":"7707083893"}]}
+{"id":"ru-snils-valid","locale":"ru-RU","text":"Тестовый СНИЛС 112-233-445 95.","entities":[{"type":"SNILS","value":"112-233-445 95"}]}
+{"id":"ru-passport-context","locale":"ru-RU","text":"Паспорт: серия 4510, номер 123456.","entities":[{"type":"PASSPORT","value":"4510, номер 123456"}]}
+{"id":"ru-phone","locale":"ru-RU","text":"Перезвоните по номеру +7 916 123-45-67.","entities":[{"type":"PHONE","value":"+7 916 123-45-67"}]}
+{"id":"ru-card-valid","locale":"ru-RU","text":"Тестовая карта 4111 1111 1111 1111.","entities":[{"type":"CARD_NUMBER","value":"4111 1111 1111 1111"}]}
+{"id":"ru-email","locale":"ru-RU","text":"Напишите на demo.user@example.com.","entities":[{"type":"EMAIL","value":"demo.user@example.com"}]}
+{"id":"ru-person","locale":"ru-RU","text":"Контактное лицо Иван Петров подтвердило запрос.","entities":[{"type":"PERSON","value":"Иван Петров"}]}

@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "corpus_version": "1.0.0",
+  "description": "Synthetic RU and EN privacy detection cases. No real personal data.",
+  "categories": ["ru", "en", "evasions", "negatives"]
+}

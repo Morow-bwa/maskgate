@@ -23,5 +23,11 @@ def rehydrate(value: Any, mapping: list[MappingItem]) -> Any:
     if isinstance(value, list):
         return [rehydrate(item, mapping) for item in value]
     if isinstance(value, dict):
-        return {key: rehydrate(item, mapping) for key, item in value.items()}
+        restored: dict[Any, Any] = {}
+        for key, item in value.items():
+            restored_key = rehydrate_text(key, mapping) if isinstance(key, str) else key
+            if restored_key in restored:
+                raise ValueError("rehydration produced a duplicate dictionary key")
+            restored[restored_key] = rehydrate(item, mapping)
+        return restored
     return value

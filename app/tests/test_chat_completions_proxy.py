@@ -7,7 +7,9 @@ from dataclasses import replace
 import httpx
 from fastapi.testclient import TestClient
 
+from app.identity import DefaultPrincipalResolver
 from app.main import create_app
+from app.privacy.policy import hash_public_value
 from app.proxy.llm_client import LLMClient, UpstreamResult
 
 
@@ -38,7 +40,7 @@ class FakeStreamingLLMClient:
     async def complete_stream(self, payload: dict):
         self.payloads.append(payload)
         user_message = [message for message in payload["messages"] if message["role"] == "user"][-1]
-        token = re.search(r"<MG_[A-Za-z0-9_-]+_EMAIL_\d+>", user_message["content"])
+        token = re.search(r"<MG:[A-Z2-7]{26}>", user_message["content"])
         assert token is not None
         value = token.group(0)
         for content in (f"Echo: {value[:7]}", value[7:-1], f"{value[-1]} and done"):
@@ -47,6 +49,172 @@ class FakeStreamingLLMClient:
                 "object": "chat.completion.chunk",
                 "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
             }
+
+
+class ToolHistoryLLMClient:
+    def __init__(self) -> None:
+        self.payloads: list[dict] = []
+
+    async def complete(self, payload: dict) -> UpstreamResult:
+        self.payloads.append(payload)
+        if len(self.payloads) == 1:
+            user_text = payload["messages"][-1]["content"]
+            token = re.search(r"<MG:[A-Z2-7]{26}>", user_text)
+            assert token is not None
+            return UpstreamResult(
+                200,
+                {
+                    "id": "chatcmpl-tool-history",
+                    "object": "chat.completion",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "send_email",
+                                            "arguments": json.dumps(
+                                                {"recipient": token.group(0)}
+                                            ),
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            )
+        return UpstreamResult(
+            200,
+            {
+                "id": "chatcmpl-tool-history-2",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Done"},
+                    }
+                ],
+            },
+        )
+
+
+def test_scoped_public_assertion_allows_only_the_matching_principal(
+    settings, tmp_path
+) -> None:
+    first_key = "tenant-a-key"
+    first_principal = DefaultPrincipalResolver(settings.application_id).resolve(
+        authorization=f"Bearer {first_key}",
+        client_host="testclient",
+    )
+    public_email = "press@example.org"
+    policy_path = tmp_path / "policy-v2.yaml"
+    policy_path.write_text(
+        f"""
+version: 2
+defaults:
+  action: BLOCK
+  reason: unmatched_data
+  obligations: [audit_decision]
+rules:
+  - id: tokenize-email
+    priority: 10
+    action: TOKENIZE
+    reason: private_email
+    obligations: [audit_decision]
+    conditions:
+      entity_types: [EMAIL]
+public_data_assertions:
+  - id: published-press-address
+    entity_type: EMAIL
+    value_sha256: {hash_public_value("EMAIL", public_email)}
+    action: ALLOW
+    reason: published_contact
+    obligations: [audit_public_assertion]
+    scope:
+      tenants: [{first_principal.tenant_id}]
+      applications: [{settings.application_id}]
+      directions: [INPUT]
+      providers: [mock]
+      purposes: [{settings.default_purpose}]
+    expires_at: 2099-01-01T00:00:00Z
+    provenance: https://example.org/contact
+""".strip(),
+        encoding="utf-8",
+    )
+    upstream = FakeLLMClient()
+    configured = replace(
+        settings,
+        api_keys=(first_key, "tenant-b-key"),
+        policy_v2_file=policy_path,
+    )
+    client = TestClient(create_app(configured, llm_client=upstream))
+    request = {
+        "model": "gpt-test",
+        "messages": [{"role": "user", "content": f"Contact {public_email}"}],
+    }
+
+    first = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {first_key}"},
+        json=request,
+    )
+    second = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer tenant-b-key"},
+        json=request,
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert public_email in str(upstream.payloads[0])
+    assert public_email not in str(upstream.payloads[1])
+    assert re.search(r"<MG:[A-Z2-7]{26}>", str(upstream.payloads[1]))
+
+
+def test_conversation_history_preserves_safe_tool_calls_without_originals(settings) -> None:
+    upstream = ToolHistoryLLMClient()
+    client = TestClient(create_app(settings, llm_client=upstream))
+    conversation_id = "tool_history_1234"
+
+    first = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "conversation_id": conversation_id,
+            "messages": [
+                {"role": "user", "content": "Email owner@example.com using the tool"}
+            ],
+        },
+    )
+    second = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "conversation_id": conversation_id,
+            "messages": [{"role": "user", "content": "Continue"}],
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert "owner@example.com" in (
+        first.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+    )
+    second_wire = upstream.payloads[1]
+    assistant = next(
+        message
+        for message in second_wire["messages"]
+        if message.get("role") == "assistant" and message.get("tool_calls")
+    )
+    arguments = assistant["tool_calls"][0]["function"]["arguments"]
+    assert "owner@example.com" not in arguments
+    assert re.search(r"<MG:[A-Z2-7]{26}>", arguments)
 
 
 def test_health_and_end_to_end_rehydration(settings) -> None:
@@ -73,7 +241,7 @@ def test_health_and_end_to_end_rehydration(settings) -> None:
     assert response.json()["choices"][0]["message"]["content"] == "Echo: Write to user@example.com"
     assert upstream.payloads[0]["messages"][0]["role"] == "system"
     assert re.search(
-        r"<MG_[A-Za-z0-9_-]+_EMAIL_1>",
+        r"<MG:[A-Z2-7]{26}>",
         upstream.payloads[0]["messages"][0]["content"],
     )
     assert "user@example.com" not in upstream.payloads[0]["messages"][0]["content"]
@@ -117,7 +285,7 @@ def test_tool_call_arguments_are_masked_before_upstream(settings) -> None:
     assert response.status_code == 200
     outbound = str(upstream.payloads[0])
     assert "private.user@example.com" not in outbound
-    assert re.search(r"<MG_[A-Za-z0-9_-]+_EMAIL_1>", outbound)
+    assert re.search(r"<MG:[A-Z2-7]{26}>", outbound)
 
 
 def test_nested_extension_text_is_masked_but_protocol_fields_are_preserved(settings) -> None:
@@ -201,7 +369,7 @@ def test_serialized_http_body_contains_only_masked_values(settings) -> None:
         captured["body"] = request.content
         captured["authorization"] = request.headers.get("authorization")
         outbound = request.content.decode("utf-8")
-        token = re.search(r"<MG_[A-Za-z0-9_-]+_EMAIL_1>", outbound)
+        token = re.search(r"<MG:[A-Z2-7]{26}>", outbound)
         assert token is not None
         return httpx.Response(
             200,
@@ -244,7 +412,7 @@ def test_serialized_http_body_contains_only_masked_values(settings) -> None:
     body = json.loads(bytes(captured["body"]))
     assert "body.user@example.com" not in json.dumps(body)
     assert "body.key@example.com" not in json.dumps(body)
-    assert re.search(r"<MG_[A-Za-z0-9_-]+_EMAIL_1>", json.dumps(body))
+    assert re.search(r"<MG:[A-Z2-7]{26}>", json.dumps(body))
     assert captured["authorization"] == "Bearer provider-test-key"
     assert response.json()["choices"][0]["message"]["content"] == "Contact body.user@example.com"
 
@@ -360,6 +528,25 @@ def test_api_key_policy_blocks_before_upstream(settings) -> None:
     assert upstream.payloads == []
 
 
+def test_reserved_token_injection_blocks_before_upstream(settings) -> None:
+    upstream = FakeLLMClient()
+    client = TestClient(create_app(settings, llm_client=upstream))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [
+                {"role": "user", "content": "Replay <MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"}
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["entities"] == ["RESERVED_TOKEN"]
+    assert upstream.payloads == []
+
+
 def test_playground_preview_does_not_call_unconfigured_provider(settings, playground_dir) -> None:
     unconfigured = replace(settings, llm_provider="openai", llm_api_key="")
     client = TestClient(create_app(unconfigured, playground_dir=playground_dir))
@@ -452,7 +639,7 @@ def test_streaming_rehydrates_split_placeholder(settings) -> None:
     assert response.status_code == 200
     assert "data: [DONE]" in response.text
     assert "user@example.com" in response.text
-    assert "<EMAIL_1" not in response.text
+    assert "<MG:" not in response.text
     assert "user@example.com" not in str(upstream.payloads[0])
 
 
@@ -465,7 +652,7 @@ def test_debug_endpoints(settings) -> None:
     masked = client.post("/debug/mask", json={"text": "user@example.com", "mode": "placeholder"})
     assert masked.status_code == 200
     assert re.fullmatch(
-        r"<MG_[A-Za-z0-9_-]+_EMAIL_1>",
+        r"<MG:[A-Z2-7]{26}>",
         masked.json()["masked_text"],
     )
 
@@ -497,6 +684,54 @@ def test_playground_is_served_and_exposes_safe_trace(settings, playground_dir) -
     assert "@example.test" in provider_text
 
 
+def test_public_api_cannot_override_operator_masking_mode(settings) -> None:
+    upstream = FakeLLMClient()
+    client = TestClient(create_app(settings, llm_client=upstream))
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "Write to user@example.com"}],
+            "masking_mode": "surrogate",
+        },
+    )
+
+    assert response.status_code == 200
+    provider_text = str(upstream.payloads[0])
+    assert re.search(r"<MG:[A-Z2-7]{26}>", provider_text)
+    assert "@example.test" not in provider_text
+
+
+def test_conversation_rejects_masking_mode_changes(settings, playground_dir) -> None:
+    upstream = FakeLLMClient()
+    client = TestClient(create_app(settings, llm_client=upstream, playground_dir=playground_dir))
+    headers = {"X-MaskGate-Conversation-ID": "conversation-mode-test"}
+
+    first = client.post(
+        "/playground/api/chat",
+        headers=headers,
+        json={
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "Write to user@example.com"}],
+            "masking_mode": "placeholder",
+        },
+    )
+    second = client.post(
+        "/playground/api/chat",
+        headers=headers,
+        json={
+            "model": "gpt-test",
+            "messages": [{"role": "user", "content": "Continue"}],
+            "masking_mode": "surrogate",
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["response"]["error"]["type"] == "conversation_mode_mismatch"
+
+
 def test_conversation_vault_keeps_masked_history_and_reuses_mapping(
     settings, playground_dir
 ) -> None:
@@ -526,7 +761,7 @@ def test_conversation_vault_keeps_masked_history_and_reuses_mapping(
     assert second.status_code == 200
     outbound_messages = upstream.payloads[1]["messages"]
     assert any(
-        re.fullmatch(r"Write to <MG_[A-Za-z0-9_-]+_EMAIL_1>", message.get("content", ""))
+        re.fullmatch(r"Write to <MG:[A-Z2-7]{26}>", message.get("content", ""))
         for message in outbound_messages
     )
     assert all("user@example.com" not in str(message) for message in outbound_messages)
@@ -569,7 +804,7 @@ def test_conversation_vault_is_isolated_by_hashed_proxy_identity(settings) -> No
     assert second.status_code == 200
     assert "owner.a@example.com" not in str(upstream.payloads[1])
     assert not any(
-        re.search(r"<MG_[A-Za-z0-9_-]+_EMAIL_1>", str(message))
+        re.search(r"<MG:[A-Z2-7]{26}>", str(message))
         for message in upstream.payloads[1]["messages"]
     )
     assert client.app.state.conversation_store.size() == 2

@@ -1,0 +1,7 @@
+{"id":"evasion-fullwidth-email","locale":"en-US","text":"Contact ａｌｉｃｅ＠ｅｘａｍｐｌｅ．ｃｏｍ.","entities":[{"type":"EMAIL","value":"ａｌｉｃｅ＠ｅｘａｍｐｌｅ．ｃｏｍ"}]}
+{"id":"evasion-zero-width-email","locale":"en-US","text":"Contact alice​@example.com.","entities":[{"type":"EMAIL","value":"alice​@example.com"}]}
+{"id":"evasion-nbsp-phone","locale":"en-US","text":"Call +1 415 555 2671.","entities":[{"type":"PHONE","value":"+1 415 555 2671"}]}
+{"id":"evasion-fullwidth-inn","locale":"ru-RU","text":"ИНН ７７０７０８３８９３.","entities":[{"type":"INN","value":"７７０７０８３８９３"}]}
+{"id":"evasion-zero-width-jwt","locale":"en-US","text":"Token eyJhbGciOiJIUzI1NiJ9.​eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature1234567890.","entities":[{"type":"JWT","value":"eyJhbGciOiJIUzI1NiJ9.​eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature1234567890"}]}
+{"id":"evasion-fullwidth-ipv6","locale":"en-US","text":"IPv6 ２００１：ｄｂ８：：１ was seen.","entities":[{"type":"IP_ADDRESS","value":"２００１：ｄｂ８：：１"}]}
+{"id":"evasion-fullwidth-iban","locale":"en-GB","text":"IBAN ＧＢ８２ ＷＥＳＴ １２３４ ５６９８ ７６５４ ３２.","entities":[{"type":"IBAN","value":"ＧＢ８２ ＷＥＳＴ １２３４ ５６９８ ７６５４ ３２"}]}

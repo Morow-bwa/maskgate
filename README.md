@@ -3,33 +3,44 @@
 [![CI](https://github.com/Morow-bwa/maskgate/actions/workflows/ci.yml/badge.svg)](https://github.com/Morow-bwa/maskgate/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/Morow-bwa/maskgate/actions/workflows/codeql.yml/badge.svg)](https://github.com/Morow-bwa/maskgate/actions/workflows/codeql.yml)
 
-Self-hosted privacy proxy for remote LLM APIs. MaskGate replaces supported sensitive values locally, sends the sanitized JSON upstream, and restores placeholders in the response without exposing the mapping to the provider.
+Self-hosted privacy proxy for remote LLM APIs. MaskGate detects supported sensitive values locally,
+applies contextual policy, sends only a post-Adapter checked body, and restores authorized tokens
+in the response.
 
-This is an educational open-source project and technical showcase. It is not a compliance product or a claim that pattern matching can find every kind of personal data.
+This is an educational open-source project and technical showcase. It is not a certified DLP or
+compliance product, and it does not claim complete PII detection.
 
 ![MaskGate Playground](docs/screenshots/playground-preview.png)
 
 ```text
-client -> auth + limits -> recursive sanitizer -> remote LLM API
-                              |                       |
-                              +-- RAM-only vault <----+
-                                      |
-                                restored response
+client -> principal -> detection -> risk/policy -> RAM vault -> canonical IR
+                                                               |
+remote provider <- exact checked bytes <- provider Adapter <---+
+       |
+client <- authorized restore <- output privacy guard <----------+
 ```
 
-## What is implemented
+## Implemented
 
-- OpenAI-compatible `POST /v1/chat/completions`, including streamed responses.
-- Recursive sanitization of the actual outbound payload: messages, tool arguments, extension fields, and object keys.
-- Fail-closed handling for unsafe protocol identifiers, unknown media in chat, detector/policy errors, and malformed files.
-- Request-scoped random placeholders and local response restoration.
-- Multi-turn conversations with bounded, tenant-isolated, RAM-only state.
-- Explicit allowlists for public email addresses, domains, and public person names.
-- Local anonymization endpoint for DOCX, PDF, PNG, JPEG, WEBP, TIFF, and BMP.
-- Minimal Playground showing the input, exact outbound request, provider response, and restored result.
-- Bearer authentication, body limits, rate limiting, trusted hosts, security headers, and production fail-closed settings.
+- OpenAI-compatible `POST /v1/chat/completions`, including strict buffered streaming.
+- Runtime provider paths for OpenAI-compatible Chat and Gemini `generateContent`.
+- Canonical Privacy IR plus tested library Adapters for OpenAI Responses, Anthropic Messages, and
+  experimental Gemini Interactions.
+- Bounded Unicode canonicalization, pluggable recognizers, checksum validators, strict detector
+  profiles, deterministic privacy risk, and contextual Policy v2.
+- Random opaque tokens, bijective bounded RAM vault, conversation mapping pruning, and
+  credential-derived principal isolation.
+- Recursive transformation of messages, object keys, metadata, tool definitions/arguments/results,
+  and structured text fields.
+- Final post-Adapter wire guard; built-in transports send the exact checked bytes.
+- Output inspection before restoration, new-PII redaction, safe structured conversation history,
+  and malformed response/stream rejection.
+- Local DOCX, PDF, PNG, JPEG, WebP, TIFF, and BMP anonymization with fail-closed format/resource
+  checks.
+- Bearer auth, rate/body/response limits, trusted hosts, safe logs/metrics, production hardening,
+  dependency/secret scans, CodeQL, and container CI.
 
-MaskGate targets remote provider APIs. Local models are intentionally out of scope because their prompts already remain inside the operator's own environment.
+See [Privacy guarantees](docs/PRIVACY_GUARANTEES.md) for the exact boundary and limitations.
 
 ## Quick start
 
@@ -41,7 +52,8 @@ Requires Python 3.12 and Node.js 22 with Corepack or pnpm:
 & .\run-playground.ps1
 ```
 
-Open [http://127.0.0.1:8080/playground](http://127.0.0.1:8080/playground). The first run creates `.venv`, installs the media stack, and builds the React UI. Later runs can use `-SkipInstall`.
+Open [http://127.0.0.1:8080/playground](http://127.0.0.1:8080/playground). Without a provider key,
+the Playground shows the exact sanitized preview and makes no external request.
 
 ### Docker
 
@@ -49,22 +61,22 @@ Open [http://127.0.0.1:8080/playground](http://127.0.0.1:8080/playground). The f
 docker compose up --build
 ```
 
-The local Compose profile binds only to `127.0.0.1` and starts in preview-only mode when no provider credentials are configured.
+The local profile binds to `127.0.0.1`.
 
-## Connect a remote provider
+## Remote provider
 
-Create an untracked `.env` file. Use any remote service that exposes the configured API adapter; the browser never receives this credential.
+Create an untracked `.env`; the browser never receives the provider credential:
 
 ```env
 LLM_PROVIDER=openai
 LLM_BASE_URL=https://api.example.com/v1
 LLM_API_KEY=replace-with-provider-key
 LLM_DEFAULT_MODEL=provider-model
+DETECTOR_PROFILE=strict
 ```
 
-Without a provider key, the Playground still displays the exact sanitized payload but no external request is made. The API endpoint returns `provider_not_configured` instead of forwarding an unauthenticated request.
-
-Example client request:
+`LLM_PROVIDER=gemini` selects the built-in Gemini Adapter. Other Adapters are library-level until
+their complete runtime path is documented in [Providers](PROVIDERS.md).
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
@@ -72,9 +84,16 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"provider-model","messages":[{"role":"user","content":"Email billing@example.org"}]}'
 ```
 
+## Policy and public data
+
+Set `POLICY_V2_FILE` to a strict contextual YAML policy. A public contact or famous name requires an
+exact hashed assertion scoped to tenant, application, provider, direction, and purpose, with expiry
+and provenance. It is not globally allowlisted. See [Policy](POLICY.md) and the
+[example schema](docs/policy-schema-v2.example.yaml).
+
 ## File anonymization
 
-Files are processed locally and are never automatically sent to an LLM provider.
+Files are processed locally and never attached to a provider request automatically:
 
 ```bash
 curl -F "file=@document.pdf" \
@@ -82,48 +101,47 @@ curl -F "file=@document.pdf" \
   http://127.0.0.1:8080/v1/privacy/files/anonymize
 ```
 
-- DOCX text, split runs, attributes, metadata, comments, and external links are sanitized; active content and embedded media are blocked.
-- PDFs are rasterized page-by-page and rebuilt, removing the original text layer, links, scripts, attachments, and metadata.
-- Images use local OCR and frontal-face detection, burn redactions into pixels, and are exported as metadata-free PNG.
-
-OCR and face detection can miss content. Review sanitized files before high-risk use. Rasterized PDFs lose searchable text and accessibility structure.
+OCR and face detection can miss content. Review sanitized files before high-risk use. Secure PDF
+mode rasterizes pages and loses search, links, forms, and accessibility structure.
 
 ## Production
 
-Production mode requires inbound auth, explicit trusted hosts, and a configured provider. The Playground and debug endpoints are disabled.
+Production requires inbound auth, trusted hosts, HTTPS provider configuration, and disabled
+Playground/debug routes:
 
 ```bash
 cp production.env.example production.env
-# edit every required value
 docker compose --env-file production.env -f compose.production.yml up -d --build
 ```
 
-Terminate TLS at a reverse proxy. Keep one application worker: conversation mappings live in process RAM. See [Deployment](docs/DEPLOYMENT.md), [Threat model](docs/THREAT_MODEL.md), and [Privacy guarantees](docs/PRIVACY_GUARANTEES.md).
+Terminate TLS at a reverse proxy and use one application worker: conversation mappings are
+process-local RAM. See [Deployment](docs/DEPLOYMENT.md), [Threat model](docs/THREAT_MODEL.md), and
+[Vault](VAULT.md).
 
 ## Verification
 
 ```powershell
-.\.venv\Scripts\python.exe -m ruff check app scripts
-.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing
-.\.venv\Scripts\python.exe -m pip_audit --local
-.\.venv\Scripts\python.exe scripts\check_secrets.py --history
+python -m ruff check app evaluation scripts
+python -m pytest app/tests --cov=app --cov-branch --cov-report=term-missing
+python -m evaluation.evaluate_detection --profile strict
+python -m pip_audit --local
+python scripts/check_secrets.py --history
 pnpm --dir playground-react build
 pnpm --dir playground-react audit --audit-level high
 ```
 
-The tests include an `httpx.MockTransport` assertion against the serialized outbound HTTP body, not only an intermediate masked object. CI also builds the container, runs a real Chromium smoke test, audits dependencies, scans credential patterns, and runs CodeQL.
+CI also runs Chromium smoke, Docker build, secret scanning, and CodeQL. Tests include assertions
+against exact serialized request bytes observed by mock HTTP providers.
 
-Current local verification: 69 tests passed, 81.8% branch coverage, React Doctor 100/100, and no known Python or npm dependency vulnerabilities.
+## Documentation
 
-## Repository map
-
-```text
-app/                    FastAPI proxy, masking, media pipeline, tests
-playground-react/       React/Vite inspection UI
-scripts/                bootstrap, browser smoke, secret scan
-docs/                   threat model, deployment, privacy decisions
-Dockerfile              non-root production image
-compose.production.yml  hardened single-instance deployment
-```
+- [Architecture](ARCHITECTURE.md)
+- [Detection](DETECTION.md)
+- [Policy](POLICY.md)
+- [Providers](PROVIDERS.md)
+- [Vault](VAULT.md)
+- [Migration](MIGRATION.md)
+- [Security review](SECURITY_AUDIT.md)
+- [Performance](docs/PERFORMANCE.md)
 
 Apache-2.0. See [LICENSE](LICENSE).

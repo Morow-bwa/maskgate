@@ -49,11 +49,14 @@ class InMemoryConversationStore:
         max_messages: int = 40,
         max_chars: int = 120_000,
         max_conversations: int = 1_000,
+        *,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.ttl_seconds = max(ttl_seconds, 1)
         self.max_messages = max(max_messages, 4)
         self.max_chars = max(max_chars, 1_000)
         self.max_conversations = max(max_conversations, 1)
+        self._clock = clock
         self._items: dict[tuple[str, str], ConversationState] = {}
         self._lock = threading.Lock()
 
@@ -72,7 +75,7 @@ class InMemoryConversationStore:
         owner_id: str,
         session_factory: Callable[[], MaskingSession],
     ) -> ConversationState:
-        now = time.time()
+        now = self._clock()
         with self._lock:
             self._cleanup_locked(now)
             key = (owner_id, conversation_id)
@@ -80,7 +83,13 @@ class InMemoryConversationStore:
             if state is None:
                 if len(self._items) >= self.max_conversations:
                     raise ConversationCapacityExceeded
-                state = ConversationState(conversation_id, owner_id, session_factory())
+                state = ConversationState(
+                    conversation_id,
+                    owner_id,
+                    session_factory(),
+                    created_at=now,
+                    last_access_at=now,
+                )
                 self._items[key] = state
             state.last_access_at = now
             return state
@@ -92,7 +101,8 @@ class InMemoryConversationStore:
         messages: list[dict[str, Any]],
     ) -> None:
         trimmed = self._trim_messages(messages)
-        now = time.time()
+        session.prune_to_references(trimmed)
+        now = self._clock()
         with self._lock:
             if self._items.get((state.owner_id, state.conversation_id)) is not state:
                 return
@@ -105,10 +115,22 @@ class InMemoryConversationStore:
             self._items.pop((owner_id, conversation_id), None)
 
     def size(self) -> int:
-        now = time.time()
+        now = self._clock()
         with self._lock:
             self._cleanup_locked(now)
             return len(self._items)
+
+    def touch(self, state: ConversationState) -> None:
+        with self._lock:
+            if self._items.get((state.owner_id, state.conversation_id)) is state:
+                state.last_access_at = self._clock()
+
+    def cleanup(self) -> int:
+        now = self._clock()
+        with self._lock:
+            before = len(self._items)
+            self._cleanup_locked(now)
+            return before - len(self._items)
 
     def _trim_messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         copied = [dict(message) for message in messages]

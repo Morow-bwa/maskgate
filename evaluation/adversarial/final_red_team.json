@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "description": "Frozen-feature defensive regression corpus for MaskGate's final privacy boundary.",
+  "safety": "All values are synthetic fixtures. Example domains are reserved for documentation, bearer labels are non-credentials, and every provider is replaced by httpx.MockTransport.",
+  "fixtures": {
+    "primary_email": "qa.owner.824@example.com",
+    "secondary_email": "qa.second.825@example.com",
+    "stale_email": "qa.stale.826@example.com",
+    "provider_email": "qa.stranger.913@example.net",
+    "foreign_token": "<MG:BBBBBBBBBBBBBBBBBBBBBBBBBB>",
+    "tenant_a_bearer": "synthetic-tenant-alpha",
+    "tenant_b_bearer": "synthetic-tenant-beta"
+  },
+  "wire_field_matrix": [
+    {
+      "provider": "openai",
+      "fields": [
+        "messages.system.content",
+        "messages.user.content[].text",
+        "messages.assistant.tool_calls[].function.arguments",
+        "messages.tool.content",
+        "tools[].function.description",
+        "tools[].function.parameters.properties.*.description",
+        "response_format.json_schema.schema.properties.*.description",
+        "stop[]",
+        "metadata.*",
+        "user"
+      ],
+      "expected": "canonical exact bytes contain no synthetic original"
+    },
+    {
+      "provider": "gemini",
+      "fields": [
+        "systemInstruction.parts[].text",
+        "contents[].parts[].text",
+        "contents[].parts[].functionCall.args",
+        "contents[].parts[].functionResponse.response",
+        "tools[].functionDeclarations[].description",
+        "tools[].functionDeclarations[].parameters.properties.*.description",
+        "generationConfig.responseSchema.properties.*.description",
+        "generationConfig.stopSequences[]"
+      ],
+      "expected": "canonical exact bytes contain no synthetic original"
+    }
+  ],
+  "wire_encodings": [
+    {
+      "id": "base64-email",
+      "value": "cWEub3duZXIuODI0QGV4YW1wbGUuY29t",
+      "expected": "blocked_before_transport"
+    },
+    {
+      "id": "base64url-email",
+      "value": "cWEub3duZXIuODI0QGV4YW1wbGUuY29t",
+      "expected": "blocked_before_transport"
+    },
+    {
+      "id": "hex-email",
+      "value": "71612e6f776e65722e383234406578616d706c652e636f6d",
+      "expected": "blocked_before_transport"
+    },
+    {
+      "id": "percent-escaped-email",
+      "value": "qa%2Eowner%2E824%40example%2Ecom",
+      "expected": "blocked_before_transport"
+    },
+    {
+      "id": "unicode-escaped-email",
+      "value": "qa\\u002Eowner\\u002E824\\u0040example\\u002Ecom",
+      "expected": "blocked_before_transport"
+    }
+  ],
+  "state_cases": [
+    {
+      "id": "active-token-only",
+      "expected": "only the current request token is restored"
+    },
+    {
+      "id": "bearer-conversation-isolation",
+      "expected": "two bearer principals cannot share one conversation vault"
+    },
+    {
+      "id": "delete-minimizes-vault",
+      "expected": "deleted mappings cannot be restored"
+    },
+    {
+      "id": "trim-minimizes-vault",
+      "expected": "unreferenced mappings are pruned after history trimming"
+    },
+    {
+      "id": "expiry-minimizes-vault",
+      "expected": "expired mappings cannot be restored"
+    }
+  ],
+  "stream_cases": [
+    {
+      "id": "openai-fragmented-content-refusal-and-tool-arguments",
+      "expected": "no unsafe provider fragment is emitted before complete inspection"
+    },
+    {
+      "id": "gemini-fragmented-text",
+      "expected": "converted Gemini text is buffered and inspected before emission"
+    }
+  ],
+  "hostile_docx": [
+    {
+      "id": "zip-traversal",
+      "expected_status": 400,
+      "expected_error": "unsafe_docx"
+    },
+    {
+      "id": "duplicate-document-part",
+      "expected_status": 400,
+      "expected_error": "unsafe_docx"
+    },
+    {
+      "id": "macro-project",
+      "expected_status": 415,
+      "expected_error": "unsupported_docx_content"
+    },
+    {
+      "id": "embedded-object",
+      "expected_status": 415,
+      "expected_error": "unsupported_docx_content"
+    },
+    {
+      "id": "unknown-opaque-part",
+      "expected_status": 415,
+      "expected_error": "unsupported_docx_content"
+    }
+  ]
+}

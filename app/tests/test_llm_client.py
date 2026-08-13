@@ -49,3 +49,48 @@ def test_stream_rejects_oversized_provider_response() -> None:
         asyncio.run(collect())
 
     assert exc_info.value.error_type == "upstream_response_too_large"
+
+
+def test_stream_rejects_malformed_sse_instead_of_returning_success() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="data: {not-json}\n\n",
+            headers={"content-type": "text/event-stream"},
+            request=request,
+        )
+
+    client = LLMClient(
+        "https://provider.invalid/v1",
+        "test-provider-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def collect() -> list[dict]:
+        return [event async for event in client.complete_stream({"stream": True})]
+
+    with pytest.raises(LLMUpstreamError) as exc_info:
+        asyncio.run(collect())
+
+    assert exc_info.value.error_type == "upstream_invalid_stream"
+
+
+def test_stream_parser_supports_multiline_sse_data() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text='data: {"choices":\ndata: []}\n\ndata: [DONE]\n\n',
+            headers={"content-type": "text/event-stream"},
+            request=request,
+        )
+
+    client = LLMClient(
+        "https://provider.invalid/v1",
+        "test-provider-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def collect() -> list[dict]:
+        return [event async for event in client.complete_stream({"stream": True})]
+
+    assert asyncio.run(collect()) == [{"choices": []}]

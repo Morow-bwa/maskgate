@@ -12,7 +12,12 @@ def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -21,8 +26,8 @@ def _env_int(name: str, default: int) -> int:
         return default
     try:
         return int(value)
-    except ValueError:
-        return default
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
 
 
 def _env_list(name: str) -> tuple[str, ...]:
@@ -77,6 +82,13 @@ class Settings:
     media_max_concurrency: int = 2
     conversation_max_count: int = 1_000
     max_upstream_response_bytes: int = 8 * 1024 * 1024
+    conversation_max_mappings: int = 5_000
+    conversation_max_sensitive_bytes: int = 2 * 1024 * 1024
+    application_id: str = "maskgate"
+    jurisdiction: str = "unspecified"
+    default_purpose: str = "remote_llm_processing"
+    detector_profile: str = "strict"
+    policy_v2_file: Path | None = None
 
     def __post_init__(self) -> None:
         if self.is_production and not self.require_auth:
@@ -125,7 +137,7 @@ class Settings:
         # ever persisted by this application.
         load_dotenv(override=False)
         mode = os.getenv("MASKING_MODE", "placeholder").strip().lower()
-        if mode not in {"placeholder", "surrogate", "redact"}:
+        if mode not in {"placeholder", "semantic_placeholder", "surrogate", "redact"}:
             mode = "placeholder"
         app_env = os.getenv("APP_ENV", "local")
 
@@ -173,5 +185,29 @@ class Settings:
             max_upstream_response_bytes=max(
                 _env_int("MAX_UPSTREAM_RESPONSE_BYTES", 8 * 1024 * 1024),
                 1_024,
+            ),
+            conversation_max_mappings=max(_env_int("CONVERSATION_MAX_MAPPINGS", 5_000), 1),
+            conversation_max_sensitive_bytes=max(
+                _env_int("CONVERSATION_MAX_SENSITIVE_BYTES", 2 * 1024 * 1024),
+                1_024,
+            ),
+            application_id=os.getenv("MASKGATE_APPLICATION_ID", "maskgate").strip()
+            or "maskgate",
+            jurisdiction=os.getenv("MASKGATE_JURISDICTION", "unspecified").strip()
+            or "unspecified",
+            default_purpose=os.getenv(
+                "MASKGATE_DEFAULT_PURPOSE", "remote_llm_processing"
+            ).strip()
+            or "remote_llm_processing",
+            detector_profile=(
+                os.getenv("DETECTOR_PROFILE", "strict").strip().casefold()
+                if os.getenv("DETECTOR_PROFILE", "strict").strip().casefold()
+                in {"fast", "balanced", "strict"}
+                else "strict"
+            ),
+            policy_v2_file=(
+                Path(os.environ["POLICY_V2_FILE"])
+                if os.getenv("POLICY_V2_FILE", "").strip()
+                else None
             ),
         )

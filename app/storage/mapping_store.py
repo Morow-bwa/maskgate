@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.masking.anonymizer import MappingItem
@@ -18,8 +19,9 @@ class RequestMapping:
 class InMemoryMappingStore:
     """Request-scoped mapping store; never writes mapping data to disk or logs."""
 
-    def __init__(self, ttl_seconds: int) -> None:
+    def __init__(self, ttl_seconds: int, *, clock: Callable[[], float] = time.monotonic) -> None:
         self.ttl_seconds = ttl_seconds
+        self._clock = clock
         self._items: dict[str, RequestMapping] = {}
         self._lock = threading.Lock()
 
@@ -29,15 +31,20 @@ class InMemoryMappingStore:
             del self._items[key]
 
     def put(self, request_id: str, items: list[MappingItem]) -> RequestMapping:
-        now = time.time()
-        mapping = RequestMapping(request_id, now, now + self.ttl_seconds, tuple(items))
+        now = self._clock()
+        mapping = RequestMapping(
+            request_id,
+            now,
+            now + self.ttl_seconds,
+            tuple(item for item in items if item.restore),
+        )
         with self._lock:
             self._cleanup_locked(now)
             self._items[request_id] = mapping
         return mapping
 
     def get(self, request_id: str) -> RequestMapping | None:
-        now = time.time()
+        now = self._clock()
         with self._lock:
             self._cleanup_locked(now)
             return self._items.get(request_id)
@@ -47,7 +54,14 @@ class InMemoryMappingStore:
             self._items.pop(request_id, None)
 
     def size(self) -> int:
-        now = time.time()
+        now = self._clock()
         with self._lock:
             self._cleanup_locked(now)
             return len(self._items)
+
+    def cleanup(self) -> int:
+        now = self._clock()
+        with self._lock:
+            before = len(self._items)
+            self._cleanup_locked(now)
+            return before - len(self._items)

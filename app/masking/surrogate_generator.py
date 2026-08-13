@@ -12,20 +12,23 @@ class SurrogateGenerator:
     def generate(self, entity_type: str) -> str:
         self._counters[entity_type] += 1
         index = self._counters[entity_type]
-        values = {
-            "PERSON": ["Demo Person One", "Demo Person Two", "Demo Person Three"],
-            "ORG": ["Northwind Labs", "Example Systems", "Contoso Research"],
-            "EMAIL": ["demo.one@example.test", "demo.two@example.test"],
-            "PHONE": ["+1 202-555-0101", "+1 202-555-0102"],
-            "IP_ADDRESS": ["198.51.100.10", "203.0.113.10"],
-            "DOMAIN": ["example.test", "internal.example.test"],
-            "URL": ["https://example.test/resource", "https://internal.example.test/item"],
-            "API_KEY": ["sk-test-maskgate-000000000001", "sk-test-maskgate-000000000002"],
-            "FILE_PATH": [r"C:\Users\Demo\Documents\file.txt", r"/home/demo/documents/file.txt"],
-            "MONEY": ["$1,234.56", "$987.65"],
-            "CARD_NUMBER": ["4111 1111 1111 1111", "5555 5555 5555 4444"],
-            "BANK": ["Example Bank", "Northwind Bank"],
-            "LOCATION": ["Example City", "Northwind Avenue"],
+        generators = {
+            "PERSON": lambda value: f"Demo Person {value}",
+            "ORG": lambda value: f"Example Organization {value}",
+            "EMAIL": lambda value: f"demo.{value}@example.test",
+            "PHONE": lambda value: f"+1 202-555-{value % 10_000:04d} ext {value}",
+            "IP_ADDRESS": lambda value: f"198.51.{(value // 254) % 254}.{value % 254 + 1}",
+            "DOMAIN": lambda value: f"demo-{value}.example.test",
+            "URL": lambda value: f"https://example.test/resource/{value}",
+            "API_KEY": lambda value: f"sk-test-maskgate-{value:024d}",
+            "FILE_PATH": lambda value: rf"C:\MaskGate\Synthetic\file-{value}.txt",
+            "MONEY": lambda value: f"${value:,}.00",
+            "CARD_NUMBER": lambda value: f"0000 0000 {value // 10_000:04d} {value % 10_000:04d}",
+            "BANK": lambda value: f"Example Bank {value}",
+            "LOCATION": lambda value: f"Example Location {value}",
         }
-        choices = values.get(entity_type, [f"Synthetic {entity_type.title()} {index}"])
-        return choices[(index - 1) % len(choices)]
+        generator = generators.get(
+            entity_type,
+            lambda value: f"Synthetic {entity_type.title()} {value}",
+        )
+        return generator(index)

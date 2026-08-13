@@ -1,0 +1,7 @@
+{"id":"negative-version","locale":"en-US","text":"Release version 2.10.34 passed all tests.","entities":[]}
+{"id":"negative-invalid-ipv6","locale":"en-US","text":"The string 2001:db8::zz is not an IPv6 address.","entities":[]}
+{"id":"negative-fake-jwt","locale":"en-US","text":"Three dotted labels aaaaaaaa.bbbbbbbb.signature are not JSON JWT claims.","entities":[]}
+{"id":"negative-uuid","locale":"en-US","text":"Trace 123e4567-e89b-12d3-a456-426614174000 is a protocol identifier.","entities":[]}
+{"id":"negative-short-key","locale":"en-US","text":"The documentation says api_key=replace-me.","entities":[]}
+{"id":"negative-order-number","locale":"en-US","text":"Order 1234567890 is a synthetic non-phone numeric identifier.","entities":[]}
+{"id":"negative-public-prose","locale":"ru-RU","text":"Это полностью синтетическая строка без персональных данных.","entities":[]}

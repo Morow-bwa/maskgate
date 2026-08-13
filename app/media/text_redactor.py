@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.masking.detector import RegexDetector
-from app.policies.policy_engine import PolicyAction, PolicyEngine
+from app.policies.policy_engine import PolicyAction, PolicyBlocked, PolicyEngine
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,10 +21,19 @@ class TextRedactor:
         self.policy = policy
 
     def redact(self, text: str) -> TextRedaction:
+        entities = self.detector.detect(text)
+        actions = [self.policy.action_for_entity(entity.type, entity.text) for entity in entities]
+        blocked = [
+            entity.type
+            for entity, action in zip(entities, actions, strict=True)
+            if action is PolicyAction.BLOCK
+        ]
+        if blocked:
+            raise PolicyBlocked(list(dict.fromkeys(blocked)))
         entities = [
             entity
-            for entity in self.detector.detect(text)
-            if self.policy.action_for_entity(entity.type, entity.text) is not PolicyAction.ALLOW
+            for entity, action in zip(entities, actions, strict=True)
+            if action is not PolicyAction.ALLOW
         ]
         if not entities:
             return TextRedaction(text, 0, ())

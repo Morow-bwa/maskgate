@@ -1,0 +1,7 @@
+{"id":"en-email","locale":"en-US","text":"Contact alice@example.com for the synthetic fixture.","entities":[{"type":"EMAIL","value":"alice@example.com"}]}
+{"id":"en-ipv6","locale":"en-US","text":"Source IPv6 2001:db8:85a3::8a2e:370:7334 was observed.","entities":[{"type":"IP_ADDRESS","value":"2001:db8:85a3::8a2e:370:7334"}]}
+{"id":"en-iban","locale":"en-GB","text":"Synthetic IBAN GB82 WEST 1234 5698 7654 32.","entities":[{"type":"IBAN","value":"GB82 WEST 1234 5698 7654 32"}]}
+{"id":"en-jwt","locale":"en-US","text":"Token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature1234567890.","entities":[{"type":"JWT","value":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature1234567890"}]}
+{"id":"en-connection-uri","locale":"en-US","text":"Use postgresql://demo:secret@db.example.test/example only in tests.","entities":[{"type":"CONNECTION_STRING","value":"postgresql://demo:secret@db.example.test/example"}]}
+{"id":"en-private-key-header","locale":"en-US","text":"Fixture contains -----BEGIN PRIVATE\u200b KEY----- but no real key.","entities":[{"type":"PRIVATE_KEY","value":"-----BEGIN PRIVATE\u200b KEY-----"}]}
+{"id":"en-ipv4","locale":"en-US","text":"Synthetic source 192.0.2.25 is reserved for documentation.","entities":[{"type":"IP_ADDRESS","value":"192.0.2.25"}]}

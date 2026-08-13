@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import datetime, timezone
 from typing import Any
+
+SAFE_EVENT_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class SafeJsonFormatter(logging.Formatter):
@@ -15,11 +18,12 @@ class SafeJsonFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
+        message = record.getMessage()
         payload: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": message if SAFE_EVENT_PATTERN.fullmatch(message) else "log_suppressed",
         }
         for key in (
             "request_id",

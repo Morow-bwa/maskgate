@@ -1,0 +1,101 @@
+# MaskGate Policy Module v2 example.
+#
+# Precedence is deterministic:
+#   1. an active, exact, fully scoped public-data assertion;
+#   2. the matching rule with the highest unique numeric priority;
+#   3. the fail-closed default.
+version: 2
+
+defaults:
+  action: BLOCK
+  reason: no_explicit_policy_match
+  obligations:
+    - audit_decision
+
+rules:
+  - id: block-auth-secrets
+    priority: 1000
+    action: BLOCK
+    reason: credentials_must_not_leave_the_trust_boundary
+    obligations:
+      - audit_decision
+      - alert_security_owner
+    conditions:
+      data_classes:
+        - AUTH_SECRET
+      directions:
+        - INPUT
+
+  - id: tokenize-support-contact-data
+    priority: 500
+    action: TOKENIZE
+    reason: approved_customer_support_flow
+    obligations:
+      - audit_decision
+      - vault_request_scope
+    conditions:
+      entity_types:
+        - EMAIL
+        - PHONE
+      tenants:
+        - example-tenant
+      applications:
+        - support-chat
+      routes:
+        - /v1/chat/completions
+      directions:
+        - INPUT
+      providers:
+        - remote-provider
+      models:
+        - example-model
+      jurisdictions:
+        - EU
+      purposes:
+        - customer-support
+      json_paths:
+        - messages.*.content
+      roles:
+        - user
+      recognizers:
+        - email-regex-v2
+        - phone-lib-v1
+      token_scopes:
+        - request
+      min_confidence: 0.85
+      risk_buckets:
+        - MEDIUM
+        - HIGH
+        - CRITICAL
+      min_risk_score: 25
+
+# Assertions are exact value hashes, time-limited, provenanced, and scoped.
+# A public person's name is not globally safe merely because it is famous.
+public_data_assertions:
+  - id: published-press-address
+    entity_type: EMAIL
+    # SHA-256 of "EMAIL\\0press@example.org" after MaskGate normalization.
+    value_sha256: d7542c949ec1f3e395ee5344822b90f76a97f0af52c4a8b43530d829ac47f2c5
+    action: ALLOW
+    reason: published_press_contact
+    obligations:
+      - audit_public_assertion
+    scope:
+      tenants:
+        - example-tenant
+      applications:
+        - support-chat
+      routes:
+        - /v1/chat/completions
+      directions:
+        - INPUT
+      providers:
+        - remote-provider
+      models:
+        - example-model
+      jurisdictions:
+        - EU
+      purposes:
+        - customer-support
+    expires_at: 2026-12-31T23:59:59Z
+    provenance: https://example.org/contact

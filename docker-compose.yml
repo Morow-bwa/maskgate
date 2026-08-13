@@ -17,6 +17,9 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.example.com/v1}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-provider-model}
+      DETECTOR_PROFILE: ${DETECTOR_PROFILE:-strict}
+      POLICY_V2_FILE: ${POLICY_V2_FILE:-}
+      MASKGATE_APPLICATION_ID: ${MASKGATE_APPLICATION_ID:-maskgate}
       MASKGATE_API_KEYS: ${MASKGATE_API_KEYS:-}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-false}
     read_only: true

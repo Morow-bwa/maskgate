@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "description": "Deterministic synthetic cases for media limits and final-wire privacy rejection.",
+  "safety": "All identifiers use reserved example domains or synthetic non-routable values.",
+  "wire_cases": [
+    {
+      "id": "numeric-phone",
+      "class": "numeric_pii",
+      "value": 79161234567,
+      "expected_error": "wire_privacy_violation"
+    },
+    {
+      "id": "base64-email",
+      "class": "base64",
+      "value": "YWR2ZXJzYXJpYWwudXNlckBleGFtcGxlLmNvbQ==",
+      "expected_error": "wire_privacy_violation"
+    },
+    {
+      "id": "hex-email",
+      "class": "hex",
+      "value": "616476657273617269616c2e75736572406578616d706c652e636f6d",
+      "expected_error": "wire_privacy_violation"
+    },
+    {
+      "id": "percent-escaped-email",
+      "class": "percent_escape",
+      "value": "adversarial%2Euser%40example%2Ecom",
+      "expected_error": "wire_privacy_violation"
+    },
+    {
+      "id": "unicode-escaped-email",
+      "class": "unicode_escape",
+      "value": "adversarial\\u002Euser\\u0040example\\u002Ecom",
+      "expected_error": "wire_privacy_violation"
+    },
+    {
+      "id": "nested-json-percent-escaped-email",
+      "class": "nested_json",
+      "value": "{\"profile\":{\"contact\":\"adversarial%2Euser%40example%2Ecom\"}}",
+      "expected_error": "wire_privacy_violation"
+    },
+    {
+      "id": "user-injected-maskgate-token",
+      "class": "user_injected_token",
+      "value": "<MG:BBBBBBBBBBBBBBBBBBBBBBBBBB>",
+      "expected_error": "wire_privacy_violation"
+    }
+  ],
+  "media_cases": [
+    {
+      "id": "docx-duplicate-entry",
+      "format": "DOCX",
+      "condition": "duplicate ZIP member name",
+      "expected": "unsafe_docx"
+    },
+    {
+      "id": "docx-entry-count",
+      "format": "DOCX",
+      "condition": "ZIP member count exceeds configured maximum",
+      "expected": "unsafe_docx"
+    },
+    {
+      "id": "docx-uncompressed-budget",
+      "format": "DOCX",
+      "condition": "aggregate uncompressed bytes exceed configured maximum",
+      "expected": "unsafe_docx"
+    },
+    {
+      "id": "docx-compression-ratio",
+      "format": "DOCX",
+      "condition": "individual ZIP member exceeds configured compression ratio",
+      "expected": "unsafe_docx"
+    },
+    {
+      "id": "docx-unknown-part",
+      "format": "DOCX",
+      "condition": "opaque package part has no allowlisted transformer",
+      "expected": "unsupported_docx_content"
+    },
+    {
+      "id": "image-pixel-budget",
+      "format": "PNG",
+      "condition": "width multiplied by height exceeds configured maximum",
+      "expected": "unsafe_image"
+    },
+    {
+      "id": "image-multiframe",
+      "format": "TIFF",
+      "condition": "input contains more than one frame",
+      "expected": "unsupported_media_type"
+    },
+    {
+      "id": "pdf-page-count",
+      "format": "PDF",
+      "condition": "page count exceeds configured maximum",
+      "expected": "unsafe_pdf"
+    },
+    {
+      "id": "pdf-page-pixels",
+      "format": "PDF",
+      "condition": "one rendered page exceeds configured pixel maximum",
+      "expected": "unsafe_pdf"
+    },
+    {
+      "id": "pdf-total-pixels",
+      "format": "PDF",
+      "condition": "aggregate rendered pixels exceed configured maximum",
+      "expected": "unsafe_pdf"
+    }
+  ]
+}

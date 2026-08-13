@@ -111,6 +111,12 @@ class DocxSanitizer:
         path = PurePosixPath(normalized)
         if normalized.startswith("/") or ".." in path.parts or normalized != info.filename:
             raise MediaSanitizationError("unsafe_docx", "DOCX contains an unsafe ZIP path")
+        if not self._is_supported_part(normalized, info.is_dir()):
+            raise MediaSanitizationError(
+                "unsupported_docx_content",
+                "DOCX contains an opaque or unsupported package part",
+                415,
+            )
         filename_entities = self.redactor.detector.detect(normalized)
         if any(
             entity.type != "DOMAIN"
@@ -133,6 +139,18 @@ class DocxSanitizer:
             raise MediaSanitizationError("unsafe_docx", "DOCX contains an invalid ZIP entry")
         if info.compress_size and info.file_size / info.compress_size > self.max_compression_ratio:
             raise MediaSanitizationError("unsafe_docx", "DOCX compression ratio is unsafe")
+
+    @staticmethod
+    def _is_supported_part(name: str, is_directory: bool) -> bool:
+        if is_directory:
+            return True
+        if name == "[Content_Types].xml" or name == "_rels/.rels":
+            return True
+        if name.startswith("docProps/") and name.endswith(".xml"):
+            return True
+        if name.startswith("word/") and name.endswith((".xml", ".rels")):
+            return True
+        return False
 
     @staticmethod
     def _is_story_part(name: str) -> bool:

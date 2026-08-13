@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.media.sanitizer import MediaSanitizer
 from app.media.types import MediaSanitizationError
+from app.policies.policy_engine import PolicyBlocked
 
 
 def build_media_router(sanitizer: MediaSanitizer, *, max_concurrency: int = 2) -> APIRouter:
@@ -29,6 +30,18 @@ def build_media_router(sanitizer: MediaSanitizer, *, max_concurrency: int = 2) -
             return JSONResponse(
                 status_code=exc.status_code,
                 content={"error": {"message": exc.message, "type": exc.error_type}},
+                headers={"Cache-Control": "no-store"},
+            )
+        except PolicyBlocked as exc:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": {
+                        "message": "File blocked because sensitive data was detected",
+                        "type": "policy_block",
+                        "entities": exc.entity_types,
+                    }
+                },
                 headers={"Cache-Control": "no-store"},
             )
         finally:

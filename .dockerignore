@@ -7,12 +7,14 @@
 .pnpm-store
 .playwright-cli
 .pytest_cache
+.pytest-tmp-*
 .ruff_cache
 .mypy_cache
 __pycache__
 *.py[cod]
 *.egg-info
 .coverage
+coverage.json
 htmlcov
 build
 dist

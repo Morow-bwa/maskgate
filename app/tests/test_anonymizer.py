@@ -56,12 +56,21 @@ def test_placeholder_namespace_prevents_literal_token_collisions(settings) -> No
     masked = session.mask_text(text, detector.detect(text))
     token = session.items[0].replacement
 
-    assert token.startswith("<MG_")
+    assert token.startswith("<MG:")
     assert token != "<EMAIL_1>"
     assert "<EMAIL_1>" in masked
     assert rehydrate_text(f"Literal <EMAIL_1>; contact {token}", session.items) == (
         "Literal <EMAIL_1>; contact collision.user@example.com"
     )
+
+
+def test_debug_mapping_serialization_never_contains_original(settings) -> None:
+    policy = PolicyEngine(settings.policy_file)
+    session = MaskingSession("placeholder", policy)
+    text = "owner@example.com"
+    session.mask_text(text, RegexDetector().detect(text))
+
+    assert text not in str(session.items[0].to_dict())
 
 
 def test_allowlisted_public_email_is_left_visible(settings) -> None:

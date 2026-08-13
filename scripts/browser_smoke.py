@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from io import BytesIO
 from pathlib import Path
 
@@ -39,7 +40,7 @@ def main() -> None:
         page.get_by_text("Preview only. No provider key is configured", exact=False).wait_for()
         outbound = page.locator(".readout pre").first.text_content() or ""
         assert "billing@example.org" not in outbound
-        assert "<MG_" in outbound
+        assert re.search(r"<MG:[A-Z2-7]{26}>", outbound)
 
         page.locator(".file-tool summary").click()
         image_bytes = BytesIO()

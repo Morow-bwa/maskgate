@@ -1,62 +1,114 @@
-# Security review
+# Security engineering review
 
-Date: 2026-08-09
-Scope: FastAPI proxy, provider adapters, React Playground, media pipeline, deployment files, dependencies, tests, and repository hygiene.
+Date: 2026-08-13
+Baseline: `75f840e`
+Scope: privacy runtime, provider Adapters/transports, vault/conversations, output/streaming, media,
+configuration, logs/metrics, deployment, dependencies, CI, and repository hygiene.
 
-This is an internal engineering review of an educational project, not a penetration test or certification.
+This is an internal engineering review of an educational project, not a penetration test,
+certification, or legal compliance assessment.
 
-## Resolved high-risk findings
+## Verified findings addressed
 
-### Outbound data escaped message-only masking
+### Reversible surrogate collision (P0)
 
-Tool arguments, provider extension fields, and object keys could have bypassed a `messages[].content`-only implementation. MaskGate now recursively sanitizes every outbound string and key at the final provider boundary. Protocol identifiers are inspected and grammar-validated; unsafe values block before HTTP.
+Finite surrogate lists wrapped and could map different originals to the same replacement. Surrogate
+generation is now unique and the vault enforces a bijection. Collision and repeated-generation tests
+cover the invariant.
 
-Evidence: tests assert against the serialized body received by `httpx.MockTransport`, including nested metadata and object keys.
+### Encoded, numeric, and post-Adapter wire bypasses (P0)
 
-### Missing provider key reached the remote API
+Recursive pre-Adapter masking alone could not guarantee the actual provider body. The final guard
+now checks Adapter output, encoded views, nested JSON, token provenance, object keys, and numeric
+field registries. Built-in transports accept sealed checked bytes. OpenAI and Gemini
+`httpx.MockTransport` tests assert the exact sent body.
 
-Example-like or empty provider credentials now make the service not ready. Playground uses local preview-only mode; the compatible API returns `provider_not_configured`. No unauthenticated upstream request is attempted.
+### Opaque DOCX content (P0)
 
-### Public deployment lacked abuse controls
+Unknown OPC parts could preserve hidden data. DOCX uses a reviewed allowlist and rejects media,
+embeds, macros, unknown opaque parts, duplicate entries, external relationships, and archive limit
+violations.
 
-Production now requires Bearer authentication and explicit trusted hosts, disables Playground/debug routes, and applies constant-time key comparison, canonical-identity rate limiting, request/file limits, security headers, bounded state, and non-forwarding of client authorization.
+### Token collision, injection, and metadata leakage (P1)
 
-### Conversation state could cross tenant or exhaust memory
+Default tokens now carry 128 random bits, no type, and no counter. Reserved token grammar in client
+input blocks before provider access. Semantic placeholders are an explicit compatibility mode.
 
-Conversation state is keyed by a hash-derived security identity and conversation ID. TTL, message, character, and conversation-count bounds are enforced; capacity exhaustion returns 503 before provider access.
+### Streaming and output gaps (P1)
 
-### File support had no privacy-safe boundary
+Strict streaming covers every choice plus content, refusal, legacy function arguments, and modern
+tool arguments. Provider output is inspected before restoration; new PII and unknown tokens are
+redacted. Malformed successful responses and malformed events fail closed.
 
-The file endpoint is local-only and fail closed. DOCX archives are checked for traversal, duplicates, expansion size/ratio, active content, and unverifiable embedded objects. PDFs are rebuilt from sanitized pixels. Images burn OCR/face redactions into a metadata-free PNG and are verified again before return.
+### Conversation retention and semantics (P1)
 
-### Deployment and dependency drift
+Provider-safe history retains structured assistant tool calls/results instead of only text.
+Rehydrated originals are not written to history. Trimming prunes unreferenced mappings; TTL,
+explicit deletion, capacity and sensitive-byte budgets are enforced with deterministic clocks.
 
-The production dependency graph is pinned in `requirements.lock`; pnpm has an integrity lock. CI runs lint, tests/coverage, dependency audits, credential-pattern scanning, Chromium smoke, Docker build, and CodeQL. Dependabot covers Python, npm, Docker, and Actions.
+### Authentication-only tenancy (P1)
 
-The container runs as UID 10001. Production Compose adds a read-only root filesystem, no capabilities, `no-new-privileges`, health checks, and process/resource limits.
+`PrincipalContext` provides pseudonymous tenant/application/subject identity without retaining the
+credential. Vault/conversation/rate-limit namespaces use it. Same conversation ID under different
+keys is isolated by tests.
+
+### Context-blind policy and public allowlists (P1)
+
+Policy v2 uses principal, route, provider, model, purpose, path, role, confidence, risk, recognizer,
+and token scope. Public status requires an exact hashed, scoped, expiring, provenanced assertion and
+cannot override explicit block/review rules.
+
+### Detection architecture and evasions (P1)
+
+Detection now has a recognizer Interface, bounded NFKC/zero-width/NBSP canonicalization with span
+provenance, validators, profiles, and a synthetic evaluation corpus. Metrics are corpus-specific;
+real-world recall remains unknown.
+
+### Unsafe logging and observability labels (P1)
+
+Structured logging suppresses unapproved messages and logs event codes/allowlisted fields. Metrics
+accept enum names and bounded taxonomy labels only; raw values, prompts, credentials, paths, and
+arbitrary high-cardinality labels are absent from the Interface.
+
+### Final red-team compatibility findings (P1)
+
+The frozen-feature adversarial pass found two fail-closed interoperability defects, not data
+disclosure: documented schema member names were misclassified as Base64, and the fixed OpenAI
+stream `object` value was redacted as a domain. Dictionary keys still receive direct PII/token
+checks but are no longer decoded as opaque values. Exact known protocol literals are preserved.
+All 28 independent regression cases pass after the fixes.
+
+## Rejected or narrowed suspected findings
+
+- Mappings were not persisted to disk/Redis; the risk was stale in-memory lifetime, now minimized.
+- Media was not automatically sent to the remote provider; its risk is local anonymization quality
+  and hostile-file parsing.
+- A provider-independent Adapter class does not equal runtime support. Only OpenAI-compatible Chat
+  and Gemini `generateContent` have complete wired paths at this milestone.
+- Local models remain out of project scope by design; masking them does not protect a remote trust
+  boundary.
 
 ## Residual risks
 
-- Detector quality is not perfect: regex, OCR, and frontal-face detection can miss sensitive content.
-- Remaining context may enable semantic re-identification even when direct identifiers are masked.
-- RAM-only mappings are visible to a compromised host and disappear on restart.
-- Rate limits and conversations are process-local; one worker is required.
-- The app does not terminate TLS. A reverse proxy and outbound network policy are operator responsibilities.
-- Rasterized PDFs lose search, links, forms, and accessibility structure.
-- DOCX embedded media/objects, audio, video, spreadsheets, and legacy document formats are blocked or unsupported.
-- Docker could not be built in the original Windows development environment because Docker was not installed; CI is the authoritative container build check.
+- No production-quality local PERSON/ORG/LOCATION/address/health NER; regex/OCR/face false negatives
+  and PHONE/DOMAIN false positives remain.
+- Semantic re-identification from context is possible after direct identifiers are removed.
+- Strict streaming buffers output and loses first-token latency.
+- RAM is visible to a compromised host and cannot be reliably zeroized by Python.
+- One worker is required for conversation mappings; there is no encrypted shared vault.
+- Responses, Anthropic, and Gemini Interactions are Adapter-library surfaces, not complete public
+  transport claims.
+- Unsupported binary/media/provider extensions block. This is a compatibility limitation and a
+  deliberate privacy property.
 
-## Verification commands
+## Verification
 
-```powershell
-.\.venv\Scripts\python.exe -m ruff check app scripts
-.\.venv\Scripts\python.exe -m pytest --cov=app --cov-report=term-missing
-.\.venv\Scripts\python.exe -m pip_audit --local
-.\.venv\Scripts\python.exe scripts\check_secrets.py --history
-pnpm --dir playground-react build
-pnpm --dir playground-react audit --audit-level high
-```
+The final local Windows run passed 274 tests with branch coverage enabled and 82.93% combined
+coverage, above the 75f840e baseline of 81.81%. The strict 28-case detection corpus, 500-iteration
+synthetic privacy benchmark, Ruff, compileall, isolated-project dependency audit, frontend build,
+frontend audit, React Doctor, secret/history scan, and diff checks also passed. Docker is not
+installed on this host, so Linux container build and CodeQL remain CI-authoritative. Exact commands
+are in the README and final report.
 
-Local result on 2026-08-09: 69 tests passed, 81.8% branch coverage, React Doctor 100/100, no known Python/npm dependency vulnerabilities, and no credential-pattern or non-reserved-email findings in repository files or reachable Git history.
-
-See [Threat model](docs/THREAT_MODEL.md) and [Privacy guarantees](docs/PRIVACY_GUARANTEES.md) for the exact boundary and non-guarantees.
+See `ARCHITECTURE.md`, `docs/THREAT_MODEL.md`, `docs/PRIVACY_GUARANTEES.md`, `DETECTION.md`,
+`POLICY.md`, `PROVIDERS.md`, `VAULT.md`, and `MIGRATION.md`.

@@ -3,6 +3,8 @@ import asyncio
 import httpx
 import pytest
 
+from app.masking.detector import RegexDetector
+from app.privacy.wire import FinalWirePrivacyGuard
 from app.proxy.gemini_client import GeminiClient
 from app.proxy.llm_client import LLMUpstreamError
 
@@ -72,6 +74,43 @@ def test_gemini_request_keeps_api_key_out_of_url() -> None:
     assert result.status_code == 200
     assert seen["key"] == "local-test-secret"
     assert "local-test-secret" not in str(seen["url"])
+
+
+def test_gemini_transport_sends_only_post_adapter_checked_bytes() -> None:
+    seen: dict[str, bytes] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = request.content
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]},
+            request=request,
+        )
+
+    client = GeminiClient(
+        "https://generativelanguage.googleapis.com/v1beta",
+        "local-test-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    token = "<MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"
+    provider, target, body = client.prepare_request(
+        {
+            "model": "gemini-2.5-flash",
+            "messages": [{"role": "user", "content": f"Email {token}"}],
+        }
+    )
+    checked = FinalWirePrivacyGuard(RegexDetector()).check(
+        provider=provider,
+        target=target,
+        payload=body,
+        approved_tokens={token},
+    )
+
+    result = asyncio.run(client.complete(checked))
+
+    assert result.status_code == 200
+    assert token.encode() in seen["body"]
+    assert b"owner@example.com" not in seen["body"]
 
 
 def test_gemini_stream_is_converted_to_openai_chunks() -> None:

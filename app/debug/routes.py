@@ -24,12 +24,14 @@ def build_debug_router(
     @router.post("/mask")
     async def mask(request: DebugMaskRequest) -> JSONResponse:
         mode = (request.mode or default_mode).strip().lower()
-        if mode not in {"placeholder", "surrogate", "redact"}:
+        if mode not in {"placeholder", "semantic_placeholder", "surrogate", "redact"}:
             return JSONResponse(
                 status_code=422,
                 content={
                     "error": {
-                        "message": "mode must be placeholder, surrogate, or redact",
+                        "message": (
+                            "mode must be placeholder, semantic_placeholder, surrogate, or redact"
+                        ),
                         "type": "invalid_masking_mode",
                     }
                 },

@@ -28,9 +28,13 @@ jobs:
           python -m pip install --upgrade "pip>=26.2.1"
           python -m pip install -e ".[dev,media]"
       - name: Lint
-        run: python -m ruff check app scripts
+        run: python -m ruff check app evaluation scripts
+      - name: Evaluate privacy detection corpus
+        run: python -m evaluation.evaluate_detection --profile strict
+      - name: Smoke-test privacy performance benchmark
+        run: python -m evaluation.benchmark_privacy --iterations 10
       - name: Test with coverage
-        run: python -m pytest --cov=app --cov-report=term-missing --cov-fail-under=75
+        run: python -m pytest --cov=app --cov-branch --cov-report=term-missing --cov-fail-under=81.8
       - name: Audit Python dependencies
         run: python -m pip_audit --local
       - name: Verify production lock

@@ -4,12 +4,20 @@ from dataclasses import replace
 
 import pytest
 
-from app.config import _env_int, provider_key_is_configured
+from app.config import _env_bool, _env_int, provider_key_is_configured
 
 
-def test_env_int_falls_back_for_invalid_values(monkeypatch) -> None:
+def test_env_int_rejects_invalid_values(monkeypatch) -> None:
     monkeypatch.setenv("MASKGATE_TEST_INT", "not-a-number")
-    assert _env_int("MASKGATE_TEST_INT", 120) == 120
+    with pytest.raises(ValueError, match="must be an integer"):
+        _env_int("MASKGATE_TEST_INT", 120)
+
+
+def test_invalid_security_boolean_fails_closed(monkeypatch) -> None:
+    monkeypatch.setenv("BLOCK_API_KEYS", "tru")
+
+    with pytest.raises(ValueError, match="BLOCK_API_KEYS"):
+        _env_bool("BLOCK_API_KEYS", True)
 
 
 def test_example_provider_keys_are_not_treated_as_configured() -> None:

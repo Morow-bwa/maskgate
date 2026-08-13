@@ -144,6 +144,49 @@ def test_docx_rejects_embedded_content_that_cannot_be_verified(settings) -> None
     assert response.json()["error"]["type"] == "unsupported_docx_content"
 
 
+def test_docx_rejects_unknown_opaque_package_parts(settings) -> None:
+    source = BytesIO()
+    with ZipFile(source, "w", ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+        )
+        archive.writestr(
+            "word/document.xml",
+            '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>',
+        )
+        archive.writestr("attachments/private.bin", b"alice@example.com")
+
+    client = TestClient(create_app(settings, llm_client=object()))
+    response = client.post(
+        "/v1/privacy/files/anonymize",
+        files={
+            "file": (
+                "unsafe.docx",
+                source.getvalue(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 415
+    assert response.json()["error"]["type"] == "unsupported_docx_content"
+
+
+def test_media_policy_block_is_not_silently_downgraded_to_redaction(settings) -> None:
+    client = TestClient(create_app(settings, llm_client=object()))
+    payload = _docx(_simple_document("sk-test-abcdefghijklmnop"))
+
+    response = client.post(
+        "/v1/privacy/files/anonymize",
+        files={"file": ("secret.docx", payload, "application/octet-stream")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "policy_block"
+    assert response.json()["error"]["entities"] == ["API_KEY"]
+
+
 def test_media_upload_uses_its_own_body_limit(settings) -> None:
     source = BytesIO()
     Image.new("RGB", (96, 96), "white").save(source, format="BMP")
