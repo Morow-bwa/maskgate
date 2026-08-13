@@ -118,7 +118,7 @@ typing-inspection==0.4.4
     #   pydantic
 urllib3==2.7.0
     # via requests
-uvicorn==0.52.2
+uvicorn==0.52.3
     # via maskgate (pyproject.toml)
 uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32'
     # via uvicorn
