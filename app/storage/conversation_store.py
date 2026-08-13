@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import threading
 import time
@@ -114,6 +115,14 @@ class InMemoryConversationStore:
         with self._lock:
             self._items.pop((owner_id, conversation_id), None)
 
+    def delete_owner(self, owner_id: str) -> int:
+        """Delete every in-memory conversation vault owned by one tenant scope."""
+        with self._lock:
+            owned_keys = [key for key in self._items if key[0] == owner_id]
+            for key in owned_keys:
+                del self._items[key]
+            return len(owned_keys)
+
     def size(self) -> int:
         now = self._clock()
         with self._lock:
@@ -140,9 +149,21 @@ class InMemoryConversationStore:
             copied = system_messages[:2] + non_system[-max(self.max_messages - 2, 2) :]
 
         def size(items: list[dict[str, Any]]) -> int:
-            return sum(len(str(message.get("content", ""))) for message in items)
+            try:
+                return len(
+                    json.dumps(
+                        items,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                )
+            except (TypeError, ValueError):
+                # An unsupported in-memory object must not bypass the hard
+                # retention bound by having an unknown or misleading size.
+                return self.max_chars + 1
 
-        while len(copied) > 1 and size(copied) > self.max_chars:
+        while copied and size(copied) > self.max_chars:
             removable_index = next(
                 (index for index, message in enumerate(copied) if message.get("role") != "system"),
                 0,
