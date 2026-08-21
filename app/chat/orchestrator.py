@@ -35,6 +35,12 @@ from app.storage.mapping_store import InMemoryMappingStore
 
 logger = logging.getLogger("maskgate")
 
+PUBLIC_INVALID_CONVERSATION_ID_MESSAGE = (
+    "conversation_id must contain 8-128 letters, digits, '_' or '-'"
+)
+PUBLIC_UNSANITIZED_MEDIA_MESSAGE = (
+    "Image or screen content requires local OCR/redaction before it can be sent upstream"
+)
 
 @dataclass(frozen=True, slots=True)
 class ChatExecution:
@@ -211,7 +217,11 @@ class ChatOrchestrator:
                     self._conversation_store.delete(conversation_id, principal.vault_namespace)
                 return ChatExecution(
                     400,
-                    error_payload(str(exc), "media_not_sanitized", media_type=exc.media_type),
+                    error_payload(
+                        PUBLIC_UNSANITIZED_MEDIA_MESSAGE,
+                        "media_not_sanitized",
+                        media_type=exc.media_type,
+                    ),
                     {
                         **base_trace,
                         "blocked_media": True,
@@ -525,10 +535,13 @@ class ChatOrchestrator:
             conversation_id = validate_conversation_id(
                 conversation_id_override or request.conversation_id
             )
-        except ValueError as exc:
+        except ValueError:
             return JSONResponse(
                 status_code=422,
-                content=error_payload(str(exc), "invalid_conversation_id"),
+                content=error_payload(
+                    PUBLIC_INVALID_CONVERSATION_ID_MESSAGE,
+                    "invalid_conversation_id",
+                ),
             )
 
         state: ConversationState | None = None
@@ -573,7 +586,7 @@ class ChatOrchestrator:
             return JSONResponse(
                 status_code=400,
                 content=error_payload(
-                    str(exc),
+                    PUBLIC_UNSANITIZED_MEDIA_MESSAGE,
                     "media_not_sanitized",
                     media_type=exc.media_type,
                 ),
@@ -769,10 +782,13 @@ class ChatOrchestrator:
             conversation_id = validate_conversation_id(
                 conversation_id_override or request.conversation_id
             )
-        except ValueError as exc:
+        except ValueError:
             return ChatExecution(
                 422,
-                error_payload(str(exc), "invalid_conversation_id"),
+                error_payload(
+                    PUBLIC_INVALID_CONVERSATION_ID_MESSAGE,
+                    "invalid_conversation_id",
+                ),
                 {"request_id": request_id, "masking_mode": requested_mode},
             )
         if conversation_id:
@@ -815,7 +831,11 @@ class ChatOrchestrator:
         except UnsafeMediaBlocked as exc:
             return ChatExecution(
                 400,
-                error_payload(str(exc), "media_not_sanitized", media_type=exc.media_type),
+                error_payload(
+                    PUBLIC_UNSANITIZED_MEDIA_MESSAGE,
+                    "media_not_sanitized",
+                    media_type=exc.media_type,
+                ),
                 {**base_trace, "blocked_media": True, "masked_request": None},
             )
 
