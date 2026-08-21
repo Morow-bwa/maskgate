@@ -7,6 +7,7 @@ from dataclasses import replace
 import httpx
 from fastapi.testclient import TestClient
 
+from app.chat.orchestrator import PUBLIC_UNSANITIZED_MEDIA_MESSAGE
 from app.identity import DefaultPrincipalResolver
 from app.main import create_app
 from app.privacy.policy import hash_public_value
@@ -592,6 +593,7 @@ def test_unsanitized_image_is_blocked_before_upstream(settings) -> None:
     )
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "media_not_sanitized"
+    assert response.json()["error"]["message"] == PUBLIC_UNSANITIZED_MEDIA_MESSAGE
     assert upstream.payloads == []
 
 

@@ -5,7 +5,11 @@ from collections.abc import Callable
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.chat.orchestrator import ChatOrchestrator, error_payload
+from app.chat.orchestrator import (
+    PUBLIC_INVALID_CONVERSATION_ID_MESSAGE,
+    ChatOrchestrator,
+    error_payload,
+)
 from app.identity import PrincipalContext
 from app.schemas import ChatCompletionRequest
 
@@ -87,10 +91,13 @@ def build_playground_chat_router(
                 conversation_id,
                 request_principal(http_request),
             )
-        except ValueError as exc:
+        except ValueError:
             return JSONResponse(
                 status_code=422,
-                content=error_payload(str(exc), "invalid_conversation_id"),
+                content=error_payload(
+                    PUBLIC_INVALID_CONVERSATION_ID_MESSAGE,
+                    "invalid_conversation_id",
+                ),
             )
         return JSONResponse(content={"deleted": True})
 

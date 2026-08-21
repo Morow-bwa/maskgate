@@ -8,7 +8,12 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.chat.orchestrator import _assistant_message_from_response, _role_for_path
+from app.chat.orchestrator import (
+    PUBLIC_INVALID_CONVERSATION_ID_MESSAGE,
+    PUBLIC_UNSANITIZED_MEDIA_MESSAGE,
+    _assistant_message_from_response,
+    _role_for_path,
+)
 from app.main import create_app
 from app.proxy.llm_client import LLMClient, UpstreamResult
 
@@ -319,7 +324,27 @@ def test_invalid_conversation_id_is_rejected(settings, stream: bool) -> None:
     )
 
     assert response.status_code == 422
-    assert response.json()["error"]["type"] == "invalid_conversation_id"
+    assert response.json()["error"] == {
+        "message": PUBLIC_INVALID_CONVERSATION_ID_MESSAGE,
+        "type": "invalid_conversation_id",
+    }
+
+
+def test_invalid_conversation_delete_uses_public_error(
+    settings,
+    playground_dir,
+) -> None:
+    client = TestClient(
+        create_app(settings, llm_client=RecordingUpstream(), playground_dir=playground_dir)
+    )
+
+    response = client.delete("/playground/api/conversations/invalid!")
+
+    assert response.status_code == 422
+    assert response.json()["error"] == {
+        "message": PUBLIC_INVALID_CONVERSATION_ID_MESSAGE,
+        "type": "invalid_conversation_id",
+    }
 
 
 def test_stream_capacity_failure_does_not_contact_upstream(settings) -> None:
@@ -422,6 +447,7 @@ def test_stream_media_block_is_fail_closed_and_releases_state(
 
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "media_not_sanitized"
+    assert response.json()["error"]["message"] == PUBLIC_UNSANITIZED_MEDIA_MESSAGE
     assert upstream.stream_payloads == []
     if conversation_id is not None:
         assert client.app.state.conversation_store.size() == 0
