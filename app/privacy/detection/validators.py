@@ -76,3 +76,28 @@ def is_valid_iban(value: str) -> bool:
         for digit in encoded:
             remainder = (remainder * 10 + int(digit)) % 97
     return remainder == 1
+
+
+def is_plausible_phone(value: str, *, context_before: str = "") -> bool:
+    """Validate high-signal international or explicitly labeled phone candidates."""
+
+    digits = re.sub(r"[\s()\-]", "", value).removeprefix("+")
+    if not digits.isascii() or not digits.isdigit() or not 10 <= len(digits) <= 15:
+        return False
+    if len(set(digits)) == 1:
+        return False
+    if value.lstrip().startswith("+"):
+        return True
+    labels = (
+        "call",
+        "mobile",
+        "phone",
+        "tel",
+        "перезвоните",
+        "телефон",
+        "номер",
+        "зателефонуйте",
+        "мобільний",
+    )
+    normalized_context = context_before.casefold()
+    return any(label in normalized_context for label in labels)

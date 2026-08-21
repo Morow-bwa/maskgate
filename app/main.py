@@ -24,7 +24,11 @@ from app.media.routes import build_media_router
 from app.media.sanitizer import MediaSanitizer
 from app.observability import PrivacyMetrics
 from app.policies.policy_engine import PolicyEngine
-from app.privacy.detection import DetectorEnsemble, LegacyEntityDetectorAdapter
+from app.privacy.detection import (
+    DetectorEnsemble,
+    LegacyEntityDetectorAdapter,
+    ensure_terminal_capabilities,
+)
 from app.privacy.models import DetectorProfile
 from app.privacy.output_guard import OutputPrivacyGuard
 from app.privacy.pipeline import PrivacyPipeline
@@ -36,9 +40,11 @@ from app.providers import (
     AdapterPolicy,
     GeminiGenerateContentAdapter,
     OpenAIChatCompletionsAdapter,
+    OpenAIResponsesAdapter,
 )
 from app.proxy.gemini_client import GeminiClient
 from app.proxy.llm_client import LLMClient
+from app.responses import OpenAIResponsesOrchestrator, build_responses_router
 from app.security import (
     FixedWindowRateLimiter,
     RequestBodyLimitMiddleware,
@@ -122,11 +128,14 @@ def create_app(
     if provider_name == "gemini" and not provider_secret:
         provider_secret = settings.llm_api_key
     provider_ready = llm_client is not None or provider_key_is_configured(provider_secret)
-    wire_guard = FinalWirePrivacyGuard(detector)
-    output_guard = OutputPrivacyGuard(detector)
-    openai_adapter_policy = AdapterPolicy(
-        safe_extension_fields=frozenset({"metadata", "user"})
+    wire_guard = FinalWirePrivacyGuard(privacy_detector)
+    output_guard = OutputPrivacyGuard(privacy_detector)
+    ensure_terminal_capabilities(
+        privacy_detector,
+        wire=wire_guard.detector,
+        output=output_guard.detector,
     )
+    openai_adapter_policy = AdapterPolicy(safe_extension_fields=frozenset({"metadata", "user"}))
     ingress_adapter = OpenAIChatCompletionsAdapter(openai_adapter_policy)
     egress_adapter = (
         GeminiGenerateContentAdapter()
@@ -140,6 +149,16 @@ def create_app(
         output_guard,
         ingress_adapter=ingress_adapter,
         egress_adapter=egress_adapter,
+    )
+    responses_orchestrator = OpenAIResponsesOrchestrator(
+        settings=settings,
+        upstream=upstream,
+        provider_ready=provider_ready and provider_name in {"openai", "mock"},
+        adapter=OpenAIResponsesAdapter(),
+        privacy_runtime=privacy_runtime,
+        policy=policy,
+        wire_guard=wire_guard,
+        output_guard=output_guard,
     )
     rate_limiter = FixedWindowRateLimiter(
         settings.rate_limit_requests,
@@ -202,6 +221,7 @@ def create_app(
     app.state.settings = settings
     app.state.detector = detector
     app.state.privacy_detector = privacy_detector
+    app.state.privacy_pipeline = privacy_pipeline
     app.state.policy = policy
     app.state.policy_v2 = policy_v2
     app.state.risk_engine = risk_engine
@@ -214,6 +234,7 @@ def create_app(
     app.state.media_sanitizer = media_sanitizer
     app.state.principal_resolver = principal_resolver
     app.state.chat_orchestrator = chat_orchestrator
+    app.state.responses_orchestrator = responses_orchestrator
 
     @app.middleware("http")
     async def proxy_authentication(request: Request, call_next: Any) -> Response:
@@ -300,9 +321,8 @@ def create_app(
             )
         return JSONResponse(content={"status": "ready", "provider_ready": True})
 
-    app.include_router(
-        build_chat_router(chat_orchestrator, request_principal)
-    )
+    app.include_router(build_chat_router(chat_orchestrator, request_principal))
+    app.include_router(build_responses_router(responses_orchestrator, request_principal))
 
     app.include_router(
         build_media_router(
@@ -339,10 +359,9 @@ def create_app(
                 "provider_ready": provider_ready,
             }
 
-        app.include_router(
-            build_playground_chat_router(chat_orchestrator, request_principal)
-        )
+        app.include_router(build_playground_chat_router(chat_orchestrator, request_principal))
 
     return app
+
 
 app = create_app()

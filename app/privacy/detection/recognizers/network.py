@@ -20,6 +20,7 @@ _IPV6_CANDIDATE = re.compile(r"(?<![0-9A-Za-z:])[0-9A-Fa-f:]{3,}(?![0-9A-Za-z:])
 class NetworkRecognizer:
     name = "network-address"
     profiles = frozenset(DetectorProfile)
+    capabilities = frozenset({"IP_ADDRESS"})
 
     def recognize(
         self,

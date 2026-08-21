@@ -14,9 +14,7 @@ def test_metrics_record_only_bounded_taxonomy_labels() -> None:
             "detections_total:EMAIL": 2,
             "policy_blocks_total": 1,
         },
-        "latencies": {
-            "detection": {"count": 1, "total_ms": 12.5, "maximum_ms": 12.5}
-        },
+        "latencies": {"detection": {"count": 1, "total_ms": 12.5, "maximum_ms": 12.5}},
     }
 
 

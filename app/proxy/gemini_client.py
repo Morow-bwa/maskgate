@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from app.privacy.detection import DetectorEnsemble, LegacyEntityDetectorAdapter
+from app.privacy.detection import DetectorEnsemble
 from app.privacy.models import DetectorProfile
 from app.privacy.wire import FinalWirePrivacyGuard, PrivacyCheckedPayload
 
@@ -142,9 +142,7 @@ class GeminiClient:
         if isinstance(payload, PrivacyCheckedPayload):
             return payload
         provider, target, body = self.prepare_request(payload, stream=stream)
-        detector = LegacyEntityDetectorAdapter(
-            DetectorEnsemble(profile=DetectorProfile.STRICT)
-        )
+        detector = DetectorEnsemble(profile=DetectorProfile.STRICT)
         return FinalWirePrivacyGuard(detector).check(
             provider=provider,
             target=target,
@@ -158,9 +156,7 @@ class GeminiClient:
             raise LLMUpstreamError("invalid_model", "The checked Gemini target is invalid")
         return target.split(marker, 1)[1].split(":", 1)[0]
 
-    async def complete(
-        self, payload: PrivacyCheckedPayload | dict[str, Any]
-    ) -> UpstreamResult:
+    async def complete(self, payload: PrivacyCheckedPayload | dict[str, Any]) -> UpstreamResult:
         checked = self._checked(payload, stream=False)
         model = self._model_from_target(checked.target)
         url = f"{self.base_url}{checked.target}"

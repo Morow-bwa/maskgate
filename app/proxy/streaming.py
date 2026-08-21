@@ -126,12 +126,8 @@ class BufferedStreamingOutputGuard:
                 if isinstance(delta.get(field), str):
                     paths.append(("choices", choice_index, "delta", field))
             function_call = delta.get("function_call")
-            if isinstance(function_call, dict) and isinstance(
-                function_call.get("arguments"), str
-            ):
-                paths.append(
-                    ("choices", choice_index, "delta", "function_call", "arguments")
-                )
+            if isinstance(function_call, dict) and isinstance(function_call.get("arguments"), str):
+                paths.append(("choices", choice_index, "delta", "function_call", "arguments"))
             tool_calls = delta.get("tool_calls")
             if isinstance(tool_calls, list):
                 for tool_index, tool_call in enumerate(tool_calls):
@@ -177,8 +173,7 @@ class BufferedStreamingOutputGuard:
         else:
             tool_index = int(path[4])
             delta["tool_calls"] = [
-                {"index": index, "function": {"arguments": ""}}
-                for index in range(tool_index + 1)
+                {"index": index, "function": {"arguments": ""}} for index in range(tool_index + 1)
             ]
         choices = [
             {"index": index, "delta": {}, "finish_reason": None}

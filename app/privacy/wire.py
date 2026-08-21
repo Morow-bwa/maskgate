@@ -6,8 +6,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from app.masking.detector import RegexDetector
 from app.policies.policy_engine import PolicyBlocked
+from app.privacy.detection import PrivacyDetector
+from app.privacy.models import DetectionContext, PrivacyDirection
 
 OPAQUE_TOKEN_PATTERN = re.compile(r"<MG:[A-Z2-7]{26}>")
 BASE64_PATTERN = re.compile(r"(?:[A-Za-z0-9+/]{4}){5,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
@@ -57,7 +58,7 @@ class PrivacyCheckedPayload:
 class FinalWirePrivacyGuard:
     """Inspect the exact JSON body immediately before remote transport."""
 
-    def __init__(self, detector: RegexDetector) -> None:
+    def __init__(self, detector: PrivacyDetector) -> None:
         self.detector = detector
 
     def check(
@@ -109,10 +110,18 @@ class FinalWirePrivacyGuard:
                     raise WirePrivacyViolation(
                         f"unrecognized MaskGate token at {self._format_path(path)}"
                     )
-            for entity in self.detector.detect(value):
-                if entity.text not in approved_values:
+            for detection in self.detector.analyze(
+                value,
+                DetectionContext(
+                    profile=self.detector.profile,
+                    json_path=path,
+                    direction=PrivacyDirection.INPUT,
+                ),
+            ):
+                detected_value = value[detection.start : detection.end]
+                if detected_value not in approved_values:
                     raise WirePrivacyViolation(
-                        f"unapproved {entity.type} at {self._format_path(path)}"
+                        f"unapproved {detection.entity_type} at {self._format_path(path)}"
                     )
             encoded_candidate = value
             for token in approved_tokens:
@@ -153,9 +162,7 @@ class FinalWirePrivacyGuard:
         if isinstance(value, bool) or value is None:
             return
         if isinstance(value, (int, float)) and not self._is_safe_protocol_number(provider, path):
-            raise WirePrivacyViolation(
-                f"unclassified numeric value at {self._format_path(path)}"
-            )
+            raise WirePrivacyViolation(f"unclassified numeric value at {self._format_path(path)}")
 
     def _inspect_encoded(
         self,
@@ -213,10 +220,18 @@ class FinalWirePrivacyGuard:
         for decoded in decoded_views:
             if decoded == stripped:
                 continue
-            for entity in self.detector.detect(decoded):
-                if entity.text not in approved_values:
+            for detection in self.detector.analyze(
+                decoded,
+                DetectionContext(
+                    profile=self.detector.profile,
+                    json_path=path,
+                    direction=PrivacyDirection.INPUT,
+                ),
+            ):
+                detected_value = decoded[detection.start : detection.end]
+                if detected_value not in approved_values:
                     raise WirePrivacyViolation(
-                        f"encoded {entity.type} at {self._format_path(path)}"
+                        f"encoded {detection.entity_type} at {self._format_path(path)}"
                     )
 
     @staticmethod
@@ -245,6 +260,11 @@ class FinalWirePrivacyGuard:
             ("generationConfig", "topK"),
             ("generationConfig", "topP"),
         }
+        openai_responses = {
+            ("max_output_tokens",),
+            ("temperature",),
+            ("top_p",),
+        }
         if provider in {
             "openai-compatible-chat",
             "openai-chat",
@@ -255,4 +275,6 @@ class FinalWirePrivacyGuard:
             return keys in common_chat
         if provider == "gemini-generate-content":
             return keys in gemini
+        if provider == "openai-responses":
+            return keys in openai_responses
         return False

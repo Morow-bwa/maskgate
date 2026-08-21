@@ -6,8 +6,10 @@ from typing import Iterable
 from app.privacy.models import DetectionContext, DetectorProfile, PrivacyDetection
 
 from .canonical import CanonicalText
+from .contract import DetectorCapabilityManifest
 from .recognizers import (
     LegacyRegexAdapter,
+    LocalizedContextRecognizer,
     NetworkRecognizer,
     Recognizer,
     SecretRecognizer,
@@ -21,17 +23,21 @@ _PRIORITY = {
     "API_KEY": 114,
     "URL": 105,
     "EMAIL": 100,
+    "POSTAL_ADDRESS": 99,
     "IBAN": 98,
     "CARD_NUMBER": 96,
     "INN": 94,
     "SNILS": 94,
     "PASSPORT": 92,
+    "DOB": 91,
     "FILE_PATH": 90,
     "PHONE": 80,
     "IP_ADDRESS": 78,
     "MONEY": 70,
     "DOMAIN": 60,
+    "ORG": 55,
     "PERSON": 50,
+    "LOCATION": 52,
 }
 
 _MIN_CONFIDENCE = {
@@ -56,6 +62,7 @@ class DetectorEnsemble:
                 SecretRecognizer(),
                 StructuredIdentifierRecognizer(),
                 NetworkRecognizer(),
+                LocalizedContextRecognizer(),
                 LegacyRegexAdapter(),
             )
         )
@@ -70,6 +77,13 @@ class DetectorEnsemble:
         text: str,
         context: DetectionContext | None = None,
     ) -> list[PrivacyDetection]:
+        return self.analyze(text, context)
+
+    def analyze(
+        self,
+        text: str,
+        context: DetectionContext | None = None,
+    ) -> list[PrivacyDetection]:
         active_context = context or DetectionContext(profile=self._profile)
         canonical = CanonicalText.from_text(text)
         candidates = [
@@ -80,6 +94,23 @@ class DetectorEnsemble:
             if detection.confidence >= _MIN_CONFIDENCE[active_context.profile]
         ]
         return _resolve_overlaps(_merge_exact(candidates))
+
+    def capabilities(self) -> DetectorCapabilityManifest:
+        return DetectorCapabilityManifest(
+            profile=self._profile,
+            entities=frozenset(
+                entity
+                for recognizer in self._recognizers
+                if self._profile in recognizer.profiles
+                for entity in recognizer.capabilities
+            ),
+            recognizers=frozenset(
+                recognizer.name
+                for recognizer in self._recognizers
+                if self._profile in recognizer.profiles
+            ),
+            minimum_confidence=_MIN_CONFIDENCE[self._profile],
+        )
 
 
 def _merge_exact(candidates: list[PrivacyDetection]) -> list[PrivacyDetection]:

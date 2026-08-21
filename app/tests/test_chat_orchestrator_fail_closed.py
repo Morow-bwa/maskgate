@@ -111,9 +111,7 @@ def test_conversation_policy_block_returns_only_local_masked_preview(
     playground_dir,
 ) -> None:
     upstream = RecordingUpstream()
-    client = TestClient(
-        create_app(settings, llm_client=upstream, playground_dir=playground_dir)
-    )
+    client = TestClient(create_app(settings, llm_client=upstream, playground_dir=playground_dir))
     synthetic_secret = "sk-test-abcdefghijklmnop"
 
     response = client.post(
@@ -121,9 +119,7 @@ def test_conversation_policy_block_returns_only_local_masked_preview(
         json={
             "model": "test-model",
             "conversation_id": "blocked_conversation_1",
-            "messages": [
-                {"role": "user", "content": f"Review {synthetic_secret}"}
-            ],
+            "messages": [{"role": "user", "content": f"Review {synthetic_secret}"}],
         },
     )
 
@@ -142,9 +138,7 @@ def test_conversation_reserved_token_injection_is_not_previewed_or_sent(
     playground_dir,
 ) -> None:
     upstream = RecordingUpstream()
-    client = TestClient(
-        create_app(settings, llm_client=upstream, playground_dir=playground_dir)
-    )
+    client = TestClient(create_app(settings, llm_client=upstream, playground_dir=playground_dir))
 
     response = client.post(
         "/playground/api/chat",
@@ -224,9 +218,7 @@ def test_conversation_upstream_transport_error_is_safe_and_clears_mapping(
         raise httpx.ConnectError("synthetic offline provider", request=request)
 
     upstream = _mock_llm_client(httpx.MockTransport(unavailable))
-    client = TestClient(
-        create_app(settings, llm_client=upstream, playground_dir=playground_dir)
-    )
+    client = TestClient(create_app(settings, llm_client=upstream, playground_dir=playground_dir))
 
     response = client.post(
         "/playground/api/chat",
@@ -382,9 +374,7 @@ def test_stream_rejects_conversation_mode_change(
     playground_dir,
 ) -> None:
     upstream = RecordingUpstream()
-    client = TestClient(
-        create_app(settings, llm_client=upstream, playground_dir=playground_dir)
-    )
+    client = TestClient(create_app(settings, llm_client=upstream, playground_dir=playground_dir))
     conversation_id = "stream_mode_change_1"
 
     first = client.post(
@@ -495,9 +485,7 @@ def test_stream_policy_block_never_contacts_provider(
     client = TestClient(create_app(settings, llm_client=upstream))
     payload: dict[str, Any] = {
         "model": "test-model",
-        "messages": [
-            {"role": "user", "content": "Use sk-test-abcdefghijklmnop"}
-        ],
+        "messages": [{"role": "user", "content": "Use sk-test-abcdefghijklmnop"}],
         "stream": True,
     }
     if conversation_id is not None:
@@ -578,8 +566,7 @@ def test_stream_upstream_error_is_safe_and_releases_conversation_lock(settings) 
 
 def test_malformed_stream_event_becomes_safe_output_error(settings) -> None:
     malformed_sse = (
-        'data: {"choices":[{"index":0,"delta":{"unknown":"value"}}]}\n\n'
-        "data: [DONE]\n\n"
+        'data: {"choices":[{"index":0,"delta":{"unknown":"value"}}]}\n\ndata: [DONE]\n\n'
     )
 
     def provider(_: httpx.Request) -> httpx.Response:

@@ -17,9 +17,7 @@ from app.main import create_app
 from app.proxy.gemini_client import GeminiClient
 from app.proxy.llm_client import LLMClient
 
-CORPUS_PATH = (
-    Path(__file__).parents[2] / "evaluation" / "adversarial" / "final_red_team.json"
-)
+CORPUS_PATH = Path(__file__).parents[2] / "evaluation" / "adversarial" / "final_red_team.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
 FIXTURES = CORPUS["fixtures"]
 
@@ -386,9 +384,7 @@ def test_output_rehydrates_only_the_current_active_token(settings: Any) -> None:
         "/v1/chat/completions",
         json={
             "model": "gpt-test",
-            "messages": [
-                {"role": "user", "content": f"Second {SECONDARY_EMAIL}"}
-            ],
+            "messages": [{"role": "user", "content": f"Second {SECONDARY_EMAIL}"}],
         },
     )
 
@@ -480,9 +476,7 @@ def test_openai_stream_buffers_content_refusal_and_tool_argument_fragments(
                         {
                             "index": 0,
                             "id": "call_stream_synthetic",
-                            "function": {
-                                "arguments": f'{{"email":"{unsafe_prefix}'
-                            },
+                            "function": {"arguments": f'{{"email":"{unsafe_prefix}'},
                         }
                     ]
                 },
@@ -523,11 +517,7 @@ def test_openai_stream_buffers_content_refusal_and_tool_argument_fragments(
             },
             {"index": 3, "delta": {"refusal": unsafe_suffix}},
         ]
-        stream = (
-            _stream_event(first_choices)
-            + _stream_event(second_choices)
-            + "data: [DONE]\n\n"
-        )
+        stream = _stream_event(first_choices) + _stream_event(second_choices) + "data: [DONE]\n\n"
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -660,9 +650,7 @@ def test_deleted_conversation_mapping_cannot_be_rehydrated(
     transport = httpx.MockTransport(remote)
     upstream = LLMClient("https://openai.invalid/v1", "", transport=transport)
     configured = replace(settings, llm_provider="openai")
-    client = TestClient(
-        create_app(configured, llm_client=upstream, playground_dir=playground_dir)
-    )
+    client = TestClient(create_app(configured, llm_client=upstream, playground_dir=playground_dir))
     conversation_id = "delete_synthetic_conversation"
     first = client.post(
         "/v1/chat/completions",
@@ -686,9 +674,7 @@ def test_deleted_conversation_mapping_cannot_be_rehydrated(
     assert PRIMARY_EMAIL in first.json()["choices"][0]["message"]["content"]
     assert deleted.status_code == 200
     assert second.status_code == 200
-    assert second.json()["choices"][0]["message"]["content"] == (
-        "[REDACTED_PROVIDER_TOKEN]"
-    )
+    assert second.json()["choices"][0]["message"]["content"] == ("[REDACTED_PROVIDER_TOKEN]")
     assert client.app.state.conversation_store.size() == 1
 
 
@@ -734,9 +720,7 @@ def test_trimmed_conversation_prunes_unreferenced_mapping(settings: Any) -> None
     assert all(response.status_code == 200 for response in responses)
     assert old_token.encode() not in bodies[3]
     assert PRIMARY_EMAIL.encode() not in bodies[3]
-    assert responses[3].json()["choices"][0]["message"]["content"] == (
-        "[REDACTED_PROVIDER_TOKEN]"
-    )
+    assert responses[3].json()["choices"][0]["message"]["content"] == ("[REDACTED_PROVIDER_TOKEN]")
     assert client.app.state.mapping_store.size() == 0
 
 
@@ -782,9 +766,7 @@ def test_expired_conversation_mapping_cannot_be_rehydrated(settings: Any) -> Non
     assert first.status_code == 200
     assert removed == 1
     assert second.status_code == 200
-    assert second.json()["choices"][0]["message"]["content"] == (
-        "[REDACTED_PROVIDER_TOKEN]"
-    )
+    assert second.json()["choices"][0]["message"]["content"] == ("[REDACTED_PROVIDER_TOKEN]")
 
 
 def test_request_logs_and_metrics_exclude_fixture_values(

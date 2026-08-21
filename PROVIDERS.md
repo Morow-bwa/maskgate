@@ -9,9 +9,16 @@ input into IR and serializes IR to one provider body. The final wire guard runs 
 |---|---|---:|---:|---:|
 | OpenAI Chat Completions | OpenAI-compatible Chat Completions | yes | yes | yes |
 | OpenAI Chat Completions | Gemini `generateContent` | yes | yes | yes |
+| OpenAI Responses | OpenAI Responses | yes | no (422) | yes |
 
-Both built-in transports accept `PrivacyCheckedPayload`; they send its immutable bytes with no
+All built-in transports accept `PrivacyCheckedPayload`; they send its immutable bytes with no
 post-check serialization. Gemini credentials use `x-goog-api-key`, never URL query parameters.
+
+The Responses route is deliberately stateless and non-streaming. It forces `store: false`, rejects
+`previous_response_id`, built-in/remote tools, media, and unsupported output item types, and accepts
+only local function tools plus the reviewed JSON Schema structured-output subset. Successful
+provider objects are validated and projected to `id`, `object`, `status`, and typed `output` before
+the output guard. Provider error bodies and unreviewed metadata are discarded.
 
 ## Adapter-library status
 
@@ -19,7 +26,6 @@ The following pure Adapters have schema/round-trip tests but are not claimed as 
 network routes because response conversion, transport authentication, and full stream orchestration
 are not all wired:
 
-- OpenAI Responses;
 - Anthropic Messages;
 - Gemini Interactions (experimental and opt-in by design).
 
@@ -35,6 +41,6 @@ extensions, unsafe opaque fields, and schema drift block before transport. OpenA
 `user` are the only currently reviewed top-level extensions on the OpenAI-compatible route; all
 their strings and object keys are transformed before serialization.
 
-Adding a runtime provider requires: ingress and egress fixtures, response conversion, typed stream
-events, auth/target validation, exact checked-body transport tests, output guard coverage, and an
-updated threat model.
+Adding a runtime provider requires: ingress and egress fixtures, response conversion, auth/target
+validation, exact checked-body transport tests, output guard coverage, and an updated threat model.
+Streaming may be claimed only after typed event parsing and fragmented-field parity tests pass.

@@ -47,6 +47,7 @@ def build_chat_router(
 
     return router
 
+
 def build_playground_chat_router(
     orchestrator: ChatOrchestrator,
     request_principal: PrincipalLookup,

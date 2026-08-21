@@ -19,6 +19,7 @@ class Recognizer(Protocol):
 
     name: str
     profiles: frozenset[DetectorProfile]
+    capabilities: frozenset[str]
 
     def recognize(
         self,

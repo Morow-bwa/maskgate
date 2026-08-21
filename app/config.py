@@ -191,13 +191,9 @@ class Settings:
                 _env_int("CONVERSATION_MAX_SENSITIVE_BYTES", 2 * 1024 * 1024),
                 1_024,
             ),
-            application_id=os.getenv("MASKGATE_APPLICATION_ID", "maskgate").strip()
-            or "maskgate",
-            jurisdiction=os.getenv("MASKGATE_JURISDICTION", "unspecified").strip()
-            or "unspecified",
-            default_purpose=os.getenv(
-                "MASKGATE_DEFAULT_PURPOSE", "remote_llm_processing"
-            ).strip()
+            application_id=os.getenv("MASKGATE_APPLICATION_ID", "maskgate").strip() or "maskgate",
+            jurisdiction=os.getenv("MASKGATE_JURISDICTION", "unspecified").strip() or "unspecified",
+            default_purpose=os.getenv("MASKGATE_DEFAULT_PURPOSE", "remote_llm_processing").strip()
             or "remote_llm_processing",
             detector_profile=(
                 os.getenv("DETECTOR_PROFILE", "strict").strip().casefold()

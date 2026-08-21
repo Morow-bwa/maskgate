@@ -113,10 +113,7 @@ class PrivacyRiskEngine:
         ):
             total += 10
             signals.add("combination:location_plus_quasi")
-        if (
-            DataClass.FINANCIAL in effective_classes
-            and DataClass.DIRECT_PII in effective_classes
-        ):
+        if DataClass.FINANCIAL in effective_classes and DataClass.DIRECT_PII in effective_classes:
             total += 10
             signals.add("combination:financial_plus_direct_pii")
         if len(ordered) > 1:

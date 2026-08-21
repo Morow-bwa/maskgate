@@ -20,7 +20,7 @@ from app.privacy.output_guard import OutputPrivacyGuard
 from app.privacy.pipeline import PrivacyPipeline, ProviderOutputViolation
 from app.privacy.runtime import PrivacyRequestContext, PrivacyRuntime
 from app.privacy.wire import WirePrivacyViolation
-from app.proxy.llm_client import LLMUpstreamError
+from app.proxy.llm_client import LLMUpstreamError, public_upstream_error
 from app.proxy.openai_compatible import add_masking_instruction, request_to_payload
 from app.proxy.outbound_sanitizer import sanitize_outbound_payload
 from app.proxy.streaming import BufferedStreamingOutputGuard
@@ -254,9 +254,7 @@ class ChatOrchestrator:
                 detected_types.extend(item.entity_type for item in result.detections)
                 allowlisted_types.extend(
                     detection.entity_type
-                    for detection, decision in zip(
-                        result.detections, result.decisions, strict=True
-                    )
+                    for detection, decision in zip(result.detections, result.decisions, strict=True)
                     if decision.action is PrivacyAction.ALLOW
                 )
                 allowlisted_values.extend(result.approved_originals)
@@ -335,9 +333,7 @@ class ChatOrchestrator:
                     block_secrets=False,
                     block_credit_cards=False,
                     public_email_allowlist=self._settings.public_email_allowlist,
-                    public_email_domain_allowlist=(
-                        self._settings.public_email_domain_allowlist
-                    ),
+                    public_email_domain_allowlist=(self._settings.public_email_domain_allowlist),
                     public_person_allowlist=self._settings.public_person_allowlist,
                 )
                 preview_session = state.session.clone(policy=preview_policy)
@@ -360,9 +356,7 @@ class ChatOrchestrator:
                     {
                         "detected_entity_types": unique_types,
                         "detected_entities_count": len(unique_types),
-                        "allowlisted_entity_types": list(
-                            dict.fromkeys(allowlisted_types)
-                        ),
+                        "allowlisted_entity_types": list(dict.fromkeys(allowlisted_types)),
                         "blocked_entities": list(dict.fromkeys(exc.entity_types)),
                         "masked_request": preview_outbound,
                         "preview_only": True,
@@ -402,9 +396,7 @@ class ChatOrchestrator:
                         {
                             "detected_entity_types": list(dict.fromkeys(detected_types)),
                             "detected_entities_count": len(detected_types),
-                            "allowlisted_entity_types": list(
-                                dict.fromkeys(allowlisted_types)
-                            ),
+                            "allowlisted_entity_types": list(dict.fromkeys(allowlisted_types)),
                             "preview_only": True,
                             "preview_reason": "provider_not_configured",
                             "provider_ready": False,
@@ -436,9 +428,7 @@ class ChatOrchestrator:
                     {
                         "detected_entity_types": unique_types,
                         "detected_entities_count": len(detected_types),
-                        "allowlisted_entity_types": list(
-                            dict.fromkeys(allowlisted_types)
-                        ),
+                        "allowlisted_entity_types": list(dict.fromkeys(allowlisted_types)),
                         "upstream_response": result.payload,
                         "latency_ms": _latency_ms(started),
                         "status_code": result.status_code,
@@ -446,16 +436,12 @@ class ChatOrchestrator:
                 )
                 if result.status_code < 400:
                     conversation_messages = deepcopy(state.messages)
-                    conversation_messages.extend(
-                        deepcopy(payload.get("messages", []))
-                    )
+                    conversation_messages.extend(deepcopy(payload.get("messages", [])))
                     safe_history_payload = self._output_guard.sanitize_for_history(
                         result.payload,
                         session.items,
                     )
-                    assistant_message = _assistant_message_from_response(
-                        safe_history_payload
-                    )
+                    assistant_message = _assistant_message_from_response(safe_history_payload)
                     if assistant_message is not None:
                         conversation_messages.append(assistant_message)
                     self._conversation_store.commit(
@@ -479,13 +465,12 @@ class ChatOrchestrator:
                     base_trace,
                 )
             except (LLMUpstreamError, ProviderOutputViolation) as exc:
+                public_error_type, public_message = public_upstream_error(exc.error_type)
                 base_trace.update(
                     {
                         "detected_entity_types": list(dict.fromkeys(detected_types)),
                         "detected_entities_count": len(detected_types),
-                        "allowlisted_entity_types": list(
-                            dict.fromkeys(allowlisted_types)
-                        ),
+                        "allowlisted_entity_types": list(dict.fromkeys(allowlisted_types)),
                         "latency_ms": _latency_ms(started),
                         "status_code": 502,
                     }
@@ -498,11 +483,11 @@ class ChatOrchestrator:
                     policy_result="MASK" if session.items else "ALLOW",
                     latency_ms=_latency_ms(started),
                     status_code=502,
-                    error_type=exc.error_type,
+                    error_type=public_error_type,
                 )
                 return ChatExecution(
                     502,
-                    error_payload(exc.message, exc.error_type),
+                    error_payload(public_message, public_error_type),
                     base_trace,
                 )
             finally:
@@ -619,11 +604,7 @@ class ChatOrchestrator:
             model=request.model,
             jurisdiction=self._settings.jurisdiction,
             purpose=self._settings.default_purpose,
-            token_scope=(
-                TokenScope.CONVERSATION
-                if state is not None
-                else TokenScope.REQUEST
-            ),
+            token_scope=(TokenScope.CONVERSATION if state is not None else TokenScope.REQUEST),
         )
         try:
 
@@ -732,7 +713,8 @@ class ChatOrchestrator:
                     self._conversation_store.commit(state, session, conversation_messages)
                 yield "data: [DONE]\n\n"
             except (LLMUpstreamError, ProviderOutputViolation) as exc:
-                error_event = {"error": {"type": exc.error_type, "message": exc.message}}
+                public_error_type, public_message = public_upstream_error(exc.error_type)
+                error_event = {"error": {"type": public_error_type, "message": public_message}}
                 yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
             finally:
                 self._mapping_store.delete(request_id)
@@ -881,9 +863,7 @@ class ChatOrchestrator:
                 detected_types.extend(item.entity_type for item in result.detections)
                 allowlisted_types.extend(
                     detection.entity_type
-                    for detection, decision in zip(
-                        result.detections, result.decisions, strict=True
-                    )
+                    for detection, decision in zip(result.detections, result.decisions, strict=True)
                     if decision.action is PrivacyAction.ALLOW
                 )
                 allowlisted_values.extend(result.approved_originals)
@@ -1038,6 +1018,7 @@ class ChatOrchestrator:
             )
             return ChatExecution(result.status_code, response_payload, base_trace)
         except (LLMUpstreamError, ProviderOutputViolation) as exc:
+            public_error_type, public_message = public_upstream_error(exc.error_type)
             base_trace.update(
                 {
                     "detected_entity_types": list(dict.fromkeys(detected_types)),
@@ -1055,9 +1036,13 @@ class ChatOrchestrator:
                 policy_result="MASK" if detected_types else "ALLOW",
                 latency_ms=_latency_ms(started),
                 status_code=502,
-                error_type=exc.error_type,
+                error_type=public_error_type,
             )
-            return ChatExecution(502, error_payload(exc.message, exc.error_type), base_trace)
+            return ChatExecution(
+                502,
+                error_payload(public_message, public_error_type),
+                base_trace,
+            )
         finally:
             # Request mappings are intentionally deleted even when the upstream
             # fails; TTL remains a second line of defense for abandoned flows.

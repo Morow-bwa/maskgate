@@ -26,3 +26,23 @@
 
 No confirmed P0 remains in the tested scope. A library Adapter is not marked runtime supported
 until transport, response, streaming, output, and exact-body coverage all exist.
+
+## Phase 2 working board
+
+Baseline: `60d0864`; 274 tests passed; 83% branch coverage; strict corpus 28 cases.
+
+| Work item | Priority | Baseline finding | Owner | Gate |
+|---|---:|---|---|---|
+| Unified detector contract and capability manifest | P0 | no common terminal capability contract | Agent A | complete: startup + automatic manifest tests |
+| Final Wire Guard detector consistency | P0 | directly depended on legacy `RegexDetector` | Agent A + lead | complete: malicious Adapter values blocked post-serialization |
+| Output Guard detector consistency | P0 | directly depended on legacy `RegexDetector` | Agent A + lead | complete: shared detector plus encoded-view policy |
+| Detection quality and multilingual corpus | P1 | 28 cases; PHONE precision 0.50; PERSON had one positive | Agent B | complete: 598 cases and sliced metrics |
+| Modern provider runtime completion | P1 | runtime status requires code and exact-wire verification | Agent C + lead | complete: stateless non-stream OpenAI Responses |
+| Provider exception reflection | P1 | custom upstream message reached client | Agent D + lead | fixed: bounded local public error registry |
+| Conversation hard retention bound | P2 | one oversized message survived trim | Agent D + lead | fixed: canonical size and whole-message eviction |
+| Independent adversarial QA | P0 gate | pending after implementation freeze | Agent D | passed: 40 cases; 176-case combined matrix |
+| Semantic quasi-identifier analysis/generalization | P2 | numeric risk scorer is not semantic anonymity | lead | advisory local findings + policy-authorized candidates complete |
+| Orchestrator decomposition | P2 | intentionally deferred | lead | deferred; no privacy benefit justified churn |
+
+No confirmed P0/P1 remains in the tested Phase 2 scope. Semantic analysis is an advisory API and
+is not described as anonymity, NER, or an automatic runtime policy decision.

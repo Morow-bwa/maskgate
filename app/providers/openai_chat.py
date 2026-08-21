@@ -502,9 +502,7 @@ def validate_chat_completion_response(payload: Any) -> None:
     for index, raw_choice in enumerate(choices):
         path = f"$.choices[{index}]"
         choice = expect_object(raw_choice, "openai-chat-response", path)
-        message = expect_object(
-            choice.get("message"), "openai-chat-response", f"{path}.message"
-        )
+        message = expect_object(choice.get("message"), "openai-chat-response", f"{path}.message")
         if message.get("role") != "assistant":
             raise ProviderAdapterError(
                 "openai-chat-response",
@@ -546,9 +544,7 @@ def validate_chat_completion_response(payload: Any) -> None:
 
 def _validate_response_function(value: Any, path: str) -> None:
     function = expect_object(value, "openai-chat-response", path)
-    if not isinstance(function.get("name"), str) or not isinstance(
-        function.get("arguments"), str
-    ):
+    if not isinstance(function.get("name"), str) or not isinstance(function.get("arguments"), str):
         raise ProviderAdapterError(
             "openai-chat-response", path, "function name and arguments must be text"
         )
