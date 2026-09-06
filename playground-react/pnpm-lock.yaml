@@ -19,8 +19,8 @@ importers:
         version: 18.3.1(react@18.3.1)
     devDependencies:
       '@vitejs/plugin-react':
-        specifier: ^6.0.4
-        version: 6.0.5(vite@8.2.1)
+        specifier: ^6.1.1
+        version: 6.1.1(vite@8.2.1)
       vite:
         specifier: ^8.1.5
         version: 8.2.1
@@ -123,17 +123,20 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
-  '@vitejs/plugin-react@6.0.5':
-    resolution: {integrity: sha512-BOVzne/NL162sMdResB25mUv+vWMF5NoAjNf09TeGlE7ZpszZWSD3winycicLJw72yeVsoCn/2kOhEuCvEShMA==}
+  '@vitejs/plugin-react@6.1.1':
+    resolution: {integrity: sha512-yxLaQV9gkhS8ezJqCM6+ndU7mDY6gqAg75NQ+0IjwEI8IYOmQCgkRwHKVSfWXW076DsqMo0Dk+0FK1U+M5RgFw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rolldown/plugin-babel': ^0.1.7 || ^0.2.0
       babel-plugin-react-compiler: ^1.0.0
+      oxc-transform-react: ^0.145.0
       vite: ^8.0.0
     peerDependenciesMeta:
       '@rolldown/plugin-babel':
         optional: true
       babel-plugin-react-compiler:
+        optional: true
+      oxc-transform-react:
         optional: true
 
   detect-libc@2.1.2:
@@ -367,7 +370,7 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
-  '@vitejs/plugin-react@6.0.5(vite@8.2.1)':
+  '@vitejs/plugin-react@6.1.1(vite@8.2.1)':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.2.1
