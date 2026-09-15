@@ -1,0 +1,7 @@
+{"id":"uk-person","locale":"uk-UA","text":"Контактна особа Іван Олійник підтвердила запит.","entities":[{"type":"PERSON","value":"Іван Олійник"}],"tags":["positive","multilingual"]}
+{"id":"uk-org","locale":"uk-UA","text":"Угоду підписало ТОВ «Тиха Гавань».","entities":[{"type":"ORG","value":"ТОВ «Тиха Гавань»"}],"tags":["positive","multilingual"]}
+{"id":"uk-location","locale":"uk-UA","text":"Клієнт мешкає у Львові, але адреса доставки вказана окремо.","entities":[{"type":"LOCATION","value":"Львові"}],"tags":["positive","multilingual"]}
+{"id":"uk-address","locale":"uk-UA","text":"Адреса: вулиця Лесі Українки, буд. 17, кв. 4.","entities":[{"type":"POSTAL_ADDRESS","value":"вулиця Лесі Українки, буд. 17, кв. 4"}],"tags":["positive","multilingual","structured","valid"]}
+{"id":"uk-dob","locale":"uk-UA","text":"Дата народження: 29 лютого 1988.","entities":[{"type":"DOB","value":"29 лютого 1988"}],"tags":["positive","multilingual","structured","valid"]}
+{"id":"uk-invalid-dob","locale":"uk-UA","text":"Дата народження: 31 лютого 1988 є невалідною.","entities":[],"tags":["negative","structured","invalid"]}
+{"id":"uk-hard-negative","locale":"uk-UA","text":"Нова Політика є назвою документа, а не людиною.","entities":[],"tags":["negative","hard-negative","multilingual"]}

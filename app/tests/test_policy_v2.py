@@ -328,3 +328,54 @@ def test_legacy_adapter_maps_mask_to_tokenize_without_weakening_default() -> Non
 def test_policy_context_rejects_missing_security_identity() -> None:
     with pytest.raises(ValueError):
         _context(tenant="")
+
+
+def test_legacy_obligations_are_explicitly_informational_annotations(
+    tmp_path: Path,
+) -> None:
+    policy = load_policy_v2(_write_policy(tmp_path, _base_policy()))
+    decision = PolicyEngineV2(policy, now=lambda: NOW).decide(
+        _detection(), _context(), value="private@example.com"
+    )
+
+    assert decision.obligations == ("audit_decision",)
+    assert decision.mandatory_obligations == ()
+
+
+def test_unsupported_mandatory_obligation_rejects_policy_at_load(tmp_path: Path) -> None:
+    source = _base_policy().replace(
+        "obligations: [audit_decision]",
+        "mandatory_obligations: [alert_security_owner]",
+        1,
+    )
+
+    with pytest.raises(PolicySchemaError, match="unsupported mandatory obligation"):
+        load_policy_v2(_write_policy(tmp_path, source))
+
+
+def test_higher_priority_allow_is_not_overridden_by_lower_priority_block(
+    tmp_path: Path,
+) -> None:
+    rules = """
+      - id: exact-allow
+        priority: 200
+        action: ALLOW
+        reason: reviewed_route_allow
+        conditions:
+          entity_types: [EMAIL]
+          routes: [/v1/chat/completions]
+      - id: lower-block
+        priority: 100
+        action: BLOCK
+        reason: broad_lower_priority_block
+        conditions:
+          entity_types: [EMAIL]
+    """
+    policy = load_policy_v2(_write_policy(tmp_path, _base_policy(rules)))
+
+    decision = PolicyEngineV2(policy, now=lambda: NOW).decide(
+        _detection(), _context(), value="private@example.com"
+    )
+
+    assert decision.action is PrivacyAction.ALLOW
+    assert decision.rule_id == "exact-allow"

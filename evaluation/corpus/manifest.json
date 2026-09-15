@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "corpus_version": "1.0.0",
-  "description": "Synthetic RU and EN privacy detection cases. No real personal data.",
-  "categories": ["ru", "en", "evasions", "negatives"]
+  "corpus_version": "2.0.0",
+  "description": "Synthetic RU, UK, and EN privacy detection cases. No real personal data.",
+  "categories": ["ru", "uk", "en", "evasions", "negatives", "quality"]
 }

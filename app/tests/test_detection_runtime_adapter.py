@@ -3,9 +3,7 @@ from app.privacy.models import DetectorProfile
 
 
 def test_runtime_adapter_preserves_original_span_after_unicode_canonicalization() -> None:
-    adapter = LegacyEntityDetectorAdapter(
-        DetectorEnsemble(profile=DetectorProfile.STRICT)
-    )
+    adapter = LegacyEntityDetectorAdapter(DetectorEnsemble(profile=DetectorProfile.STRICT))
     text = "Mail: user\u200b@example.com"
 
     entities = adapter.detect(text)
@@ -17,9 +15,7 @@ def test_runtime_adapter_preserves_original_span_after_unicode_canonicalization(
 
 
 def test_runtime_adapter_exposes_v2_detection_metadata() -> None:
-    adapter = LegacyEntityDetectorAdapter(
-        DetectorEnsemble(profile=DetectorProfile.STRICT)
-    )
+    adapter = LegacyEntityDetectorAdapter(DetectorEnsemble(profile=DetectorProfile.STRICT))
 
     detection = next(
         item for item in adapter.analyze("Contact user@example.com") if item.entity_type == "EMAIL"

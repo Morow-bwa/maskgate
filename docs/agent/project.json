@@ -1,0 +1,48 @@
+{
+  "purpose": "MaskGate: local masking and restoration around checked remote LLM requests.",
+  "modules": [
+    {
+      "name": "HTTP boundary",
+      "responsibility": "Authentication, tenant principal, body/rate limits, production settings and routes.",
+      "paths": ["app/main.py", "app/security.py", "app/config.py", "app/api", "app/application", "app/identity/principal.py"],
+      "tests": ["app/tests/test_config.py", "app/tests/test_principal_context.py", "app/tests/test_security_primitives.py", "app/tests/test_resource_admission.py", "app/tests/test_module_boundaries.py"]
+    },
+    {
+      "name": "Detection and policy",
+      "responsibility": "One detector contract at ingress, wire and output; bounded canonicalization, risk and policy.",
+      "paths": ["app/privacy/runtime.py", "app/privacy/approvals.py", "app/privacy/detection", "app/privacy/policy", "app/privacy/risk"],
+      "tests": ["app/tests/test_detection_boundary_consistency.py", "app/tests/test_policy_v2.py", "evaluation/evaluate_detection.py"]
+    },
+    {
+      "name": "Terminal boundaries",
+      "responsibility": "Inspect final serialized bytes and untrusted output; share encoded-view budgets.",
+      "paths": ["app/privacy/wire.py", "app/privacy/encoded.py", "app/privacy/output_guard.py", "app/privacy/pipeline.py"],
+      "tests": ["app/tests/test_terminal_encoding_regressions.py", "app/tests/test_pipeline_wire_integration.py", "app/tests/test_wire_boundary_adversarial.py"]
+    },
+    {
+      "name": "Orchestration and providers",
+      "responsibility": "Adapters translate the supported subset. Transports send sealed bytes and bound responses.",
+      "paths": ["app/chat/orchestrator.py", "app/responses/orchestrator.py", "app/providers", "app/proxy"],
+      "tests": ["app/tests/test_openai_responses_runtime.py", "app/tests/test_llm_client.py", "app/tests/test_gemini_client.py", "app/tests/test_streaming_privacy.py", "app/tests/test_streaming_history_finalization.py"]
+    },
+    {
+      "name": "Mapping and conversation state",
+      "responsibility": "Single-process RAM vault, principal isolation, restoration authorization, TTL and capacity.",
+      "paths": ["app/masking", "app/storage", "app/privacy/vault.py"],
+      "tests": ["app/tests/test_vault_token_security.py", "app/tests/test_conversation_vault_lifecycle.py"]
+    },
+    {
+      "name": "Local media and diagnostic UI",
+      "responsibility": "Bounded local media sanitization; React exposes the real masking path in local mode.",
+      "paths": ["app/media", "playground-react/src", "scripts/browser_smoke.py"],
+      "tests": ["app/tests/test_media_security.py", "app/tests/test_media_anonymization.py", "app/tests/test_media_limits.py"]
+    }
+  ],
+  "providers": {
+    "OpenAI-compatible Chat": "Runtime: non-stream and buffered strict streaming",
+    "Gemini generateContent": "Runtime: Chat-compatible ingress, converted provider output",
+    "OpenAI Responses": "Runtime: reviewed non-stream subset, store=false",
+    "Anthropic Messages / Gemini Interactions": "Library adapters only; not runtime-supported",
+    "Responses streaming / remote tools / server-side conversation chaining": "Unsupported and rejected"
+  }
+}

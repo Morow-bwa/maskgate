@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from dataclasses import replace
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app.identity import DefaultPrincipalResolver
 from app.main import create_app
 from app.media.ocr import OCRLine
+from app.media.types import MediaSanitizationResult
 
 CONTENT_TYPES = b"""<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -59,6 +66,32 @@ class OneFaceDetector:
     def detect(self, image: Image.Image) -> list[tuple[int, int, int, int]]:
         self.calls += 1
         return [(10, 10, 60, 60)] if self.calls == 1 else []
+
+
+class NoFaces:
+    def detect(self, image: Image.Image) -> list[tuple[int, int, int, int]]:
+        return []
+
+
+class SlowNativeOCR:
+    def __init__(self) -> None:
+        self.completed = threading.Event()
+
+    def extract(self, image: Image.Image) -> list[OCRLine]:
+        time.sleep(0.08)
+        self.completed.set()
+        return []
+
+
+class BlockingNativeOCR:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def extract(self, image: Image.Image) -> list[OCRLine]:
+        self.started.set()
+        self.release.wait(timeout=1)
+        return []
 
 
 def test_docx_redacts_split_runs_attributes_links_and_metadata(settings) -> None:
@@ -267,3 +300,213 @@ def test_media_endpoint_rejects_unknown_and_malformed_files(settings) -> None:
     assert unknown.json()["error"]["type"] == "unsupported_media_type"
     assert invalid_pdf.status_code == 422
     assert invalid_pdf.json()["error"]["type"] == "invalid_pdf"
+
+
+def test_strict_media_upload_above_starlette_spool_threshold_stays_in_memory(settings) -> None:
+    source = BytesIO()
+    Image.new("RGB", (1_024, 512), "white").save(source, format="BMP")
+    content = source.getvalue()
+    configured = replace(settings, max_media_file_bytes=3 * 1024 * 1024)
+    app = create_app(
+        configured,
+        llm_client=object(),
+        ocr_adapter=NoTextOCR(),
+        face_detector=NoFaces(),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/privacy/files/anonymize",
+            files={"file": ("above-spool.bmp", content, "image/bmp")},
+        )
+
+    assert len(content) > 1024 * 1024
+    assert response.status_code == 200
+    assert response.headers["x-maskgate-upload-storage"] == "memory"
+    assert app.state.admission.snapshot()["active_operations"] == 0
+
+
+def test_media_route_rejects_extra_files_and_malformed_multipart(settings) -> None:
+    app = create_app(settings, llm_client=object(), ocr_adapter=NoTextOCR())
+
+    with TestClient(app) as client:
+        extra = client.post(
+            "/v1/privacy/files/anonymize",
+            files=[
+                ("file", ("first.txt", b"one", "text/plain")),
+                ("extra", ("second.txt", b"two", "text/plain")),
+            ],
+        )
+        malformed = client.post(
+            "/v1/privacy/files/anonymize",
+            content=b"--broken\r\nraw-body-without-valid-parts",
+            headers={"Content-Type": "multipart/form-data; boundary=broken"},
+        )
+
+        assert extra.status_code == 400
+        assert extra.json()["error"]["type"] == "invalid_upload_count"
+        assert malformed.status_code in {400, 422}
+        assert app.state.admission.snapshot()["active_operations"] == 0
+
+
+def test_media_policy_uses_verified_tenant_context(settings, tmp_path) -> None:
+    first_key = "media-tenant-a"
+    second_key = "media-tenant-b"
+    resolver = DefaultPrincipalResolver(settings.application_id)
+    tenant_a = resolver.resolve(
+        authorization=f"Bearer {first_key}",
+        client_host="testclient",
+    ).tenant_id
+    tenant_b = resolver.resolve(
+        authorization=f"Bearer {second_key}",
+        client_host="testclient",
+    ).tenant_id
+    policy_path = tmp_path / "media-policy.yaml"
+    policy_path.write_text(
+        f"""
+version: 2
+defaults:
+  action: BLOCK
+  reason: no_media_rule
+rules:
+  - id: tenant-a-block-email
+    priority: 200
+    action: BLOCK
+    reason: tenant_a_rejects_email
+    conditions:
+      entity_types: [EMAIL]
+      tenants: [{tenant_a}]
+      routes: [/v1/privacy/files/anonymize]
+      providers: [local-media]
+  - id: tenant-b-redact-email
+    priority: 100
+    action: REDACT
+    reason: tenant_b_redacts_email
+    conditions:
+      entity_types: [EMAIL]
+      tenants: [{tenant_b}]
+      routes: [/v1/privacy/files/anonymize]
+      providers: [local-media]
+public_data_assertions: []
+""".strip(),
+        encoding="utf-8",
+    )
+    configured = replace(
+        settings,
+        api_keys=(first_key, second_key),
+        policy_v2_file=policy_path,
+    )
+    app = create_app(configured, llm_client=object())
+    content = _docx(_simple_document("media.owner@example.com"))
+
+    with TestClient(app) as client:
+        blocked = client.post(
+            "/v1/privacy/files/anonymize",
+            headers={"Authorization": f"Bearer {first_key}"},
+            files={"file": ("tenant-a.docx", content, "application/octet-stream")},
+        )
+        redacted = client.post(
+            "/v1/privacy/files/anonymize",
+            headers={"Authorization": f"Bearer {second_key}"},
+            files={"file": ("tenant-b.docx", content, "application/octet-stream")},
+        )
+
+    assert blocked.status_code == 400
+    assert blocked.json()["error"]["type"] == "policy_block"
+    assert redacted.status_code == 200
+    assert b"media.owner@example.com" not in redacted.content
+
+
+def test_native_ocr_finishes_under_bounded_worker_even_after_request_deadline(settings) -> None:
+    source = BytesIO()
+    Image.new("RGB", (64, 64), "white").save(source, format="PNG")
+    ocr = SlowNativeOCR()
+    configured = replace(
+        settings,
+        operation_timeout_seconds=0.03,
+        media_max_concurrency=1,
+    )
+    app = create_app(
+        configured,
+        llm_client=object(),
+        ocr_adapter=ocr,
+        face_detector=NoFaces(),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/v1/privacy/files/anonymize",
+            files={"file": ("slow.png", source.getvalue(), "image/png")},
+        )
+
+    assert response.status_code == 504
+    assert ocr.completed.wait(timeout=1)
+    assert app.state.admission.snapshot()["active_operations"] == 0
+
+
+def test_media_route_reads_through_the_configured_file_limit(settings) -> None:
+    configured = replace(settings, max_media_file_bytes=1_024)
+    app = create_app(configured, llm_client=object(), ocr_adapter=NoTextOCR())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/privacy/files/anonymize",
+            files={"file": ("too-large.bmp", b"BM" + b"x" * 1_023, "image/bmp")},
+        )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["type"] == "file_too_large"
+    assert app.state.admission.snapshot()["active_operations"] == 0
+
+
+def test_media_output_limit_never_returns_oversized_sanitizer_bytes(settings) -> None:
+    configured = replace(settings, max_media_file_bytes=1_024)
+    app = create_app(configured, llm_client=object())
+    app.state.media_sanitizer.docx.sanitize = lambda content, filename: MediaSanitizationResult(
+        content=b"x" * 1_025,
+        media_type="application/octet-stream",
+        filename="oversized.bin",
+        redactions=0,
+        entity_types=(),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/privacy/files/anonymize",
+            files={"file": ("small.docx", _docx(_simple_document()), "application/octet-stream")},
+        )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["type"] == "sanitized_file_too_large"
+    assert response.content != b"x" * 1_025
+
+
+@pytest.mark.anyio
+async def test_cancelled_media_request_releases_admission_after_native_work(settings) -> None:
+    source = BytesIO()
+    Image.new("RGB", (64, 64), "white").save(source, format="PNG")
+    ocr = BlockingNativeOCR()
+    app = create_app(
+        replace(settings, media_max_concurrency=1),
+        llm_client=object(),
+        ocr_adapter=ocr,
+        face_detector=NoFaces(),
+    )
+    transport = httpx.ASGITransport(app=app, client=("testclient", 50_000))
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        request = asyncio.create_task(
+            client.post(
+                "/v1/privacy/files/anonymize",
+                files={"file": ("blocked.png", source.getvalue(), "image/png")},
+            )
+        )
+        started = await asyncio.to_thread(ocr.started.wait, 1)
+        assert started
+        request.cancel()
+        await asyncio.sleep(0)
+        ocr.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+
+    assert app.state.admission.snapshot()["active_operations"] == 0

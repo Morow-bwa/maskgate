@@ -98,10 +98,7 @@ def test_ensemble_validates_ipv6_as_a_quasi_identifier() -> None:
 
 
 def test_ru_identity_recognizer_validates_checksums_and_passport_context() -> None:
-    text = (
-        "ИНН 7707083893; СНИЛС 112-233-445 95; "
-        "паспорт: серия 4510, номер 123456"
-    )
+    text = "ИНН 7707083893; СНИЛС 112-233-445 95; паспорт: серия 4510, номер 123456"
 
     detections = DetectorEnsemble().detect(
         text,

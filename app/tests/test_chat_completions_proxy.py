@@ -50,6 +50,7 @@ class FakeStreamingLLMClient:
                 "object": "chat.completion.chunk",
                 "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
             }
+        yield {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
 
 
 class ToolHistoryLLMClient:
@@ -79,9 +80,7 @@ class ToolHistoryLLMClient:
                                         "type": "function",
                                         "function": {
                                             "name": "send_email",
-                                            "arguments": json.dumps(
-                                                {"recipient": token.group(0)}
-                                            ),
+                                            "arguments": json.dumps({"recipient": token.group(0)}),
                                         },
                                     }
                                 ],
@@ -105,9 +104,7 @@ class ToolHistoryLLMClient:
         )
 
 
-def test_scoped_public_assertion_allows_only_the_matching_principal(
-    settings, tmp_path
-) -> None:
+def test_scoped_public_assertion_allows_only_the_matching_principal(settings, tmp_path) -> None:
     first_key = "tenant-a-key"
     first_principal = DefaultPrincipalResolver(settings.application_id).resolve(
         authorization=f"Bearer {first_key}",
@@ -157,6 +154,7 @@ public_data_assertions:
     client = TestClient(create_app(configured, llm_client=upstream))
     request = {
         "model": "gpt-test",
+        "conversation_id": "scoped-public-history-1",
         "messages": [{"role": "user", "content": f"Contact {public_email}"}],
     }
 
@@ -170,12 +168,23 @@ public_data_assertions:
         headers={"Authorization": "Bearer tenant-b-key"},
         json=request,
     )
+    continuation = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {first_key}"},
+        json={
+            "model": "gpt-test",
+            "conversation_id": "scoped-public-history-1",
+            "messages": [{"role": "user", "content": "Continue"}],
+        },
+    )
 
     assert first.status_code == 200
     assert second.status_code == 200
+    assert continuation.status_code == 200
     assert public_email in str(upstream.payloads[0])
     assert public_email not in str(upstream.payloads[1])
     assert re.search(r"<MG:[A-Z2-7]{26}>", str(upstream.payloads[1]))
+    assert public_email not in str(upstream.payloads[2])
 
 
 def test_conversation_history_preserves_safe_tool_calls_without_originals(settings) -> None:
@@ -188,9 +197,7 @@ def test_conversation_history_preserves_safe_tool_calls_without_originals(settin
         json={
             "model": "gpt-test",
             "conversation_id": conversation_id,
-            "messages": [
-                {"role": "user", "content": "Email owner@example.com using the tool"}
-            ],
+            "messages": [{"role": "user", "content": "Email owner@example.com using the tool"}],
         },
     )
     second = client.post(
@@ -204,8 +211,9 @@ def test_conversation_history_preserves_safe_tool_calls_without_originals(settin
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert "owner@example.com" in (
-        first.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+    assert (
+        "owner@example.com"
+        in (first.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"])
     )
     second_wire = upstream.payloads[1]
     assistant = next(
@@ -537,9 +545,7 @@ def test_reserved_token_injection_blocks_before_upstream(settings) -> None:
         "/v1/chat/completions",
         json={
             "model": "gpt-test",
-            "messages": [
-                {"role": "user", "content": "Replay <MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"}
-            ],
+            "messages": [{"role": "user", "content": "Replay <MG:AAAAAAAAAAAAAAAAAAAAAAAAAA>"}],
         },
     )
 
@@ -570,7 +576,11 @@ def test_playground_preview_does_not_call_unconfigured_provider(settings, playgr
     assert api_response.json()["error"]["type"] == "provider_not_configured"
     readiness = client.get("/health/ready")
     assert readiness.status_code == 503
-    assert readiness.json() == {"status": "not_ready", "provider_ready": False}
+    assert readiness.json() == {
+        "status": "not_ready",
+        "provider_ready": False,
+        "admission_ready": True,
+    }
 
 
 def test_unsanitized_image_is_blocked_before_upstream(settings) -> None:

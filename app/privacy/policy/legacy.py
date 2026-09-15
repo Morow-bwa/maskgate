@@ -38,7 +38,8 @@ class LegacyPolicyAdapter:
                     priority=100_000 - index,
                     action=_LEGACY_ACTIONS[action_name.upper()],
                     reason="adapted_legacy_policy_rule",
-                    obligations=("audit_decision", "migrate_to_policy_v2"),
+                    annotations=("audit_decision", "migrate_to_policy_v2"),
+                    mandatory_obligations=(),
                     conditions=RuleConditions(entity_types=frozenset({normalized_entity})),
                 )
             )
@@ -46,7 +47,8 @@ class LegacyPolicyAdapter:
             version="2-legacy-adapter-1",
             default_action=PrivacyAction.BLOCK,
             default_reason="legacy_policy_has_no_explicit_rule",
-            default_obligations=("audit_decision", "migrate_to_policy_v2"),
+            default_annotations=("audit_decision", "migrate_to_policy_v2"),
+            default_mandatory_obligations=(),
             rules=tuple(rules),
             public_data_assertions=(),
         )

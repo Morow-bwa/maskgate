@@ -78,8 +78,7 @@ def test_repeated_same_quasi_identifier_is_not_a_combination() -> None:
     )
 
     assert not any(
-        signal.startswith("combination:quasi_identifiers")
-        for signal in assessment.signals
+        signal.startswith("combination:quasi_identifiers") for signal in assessment.signals
     )
 
 

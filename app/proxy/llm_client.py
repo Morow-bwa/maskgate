@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import codecs
 import json
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 import httpx
 
-from app.privacy.detection import DetectorEnsemble, LegacyEntityDetectorAdapter
+from app.privacy.detection import DetectorEnsemble
 from app.privacy.models import DetectorProfile
 from app.privacy.wire import FinalWirePrivacyGuard, PrivacyCheckedPayload
+from app.proxy.contracts import TransportCapabilities
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +25,24 @@ class LLMUpstreamError(Exception):
         self.error_type = error_type
         self.message = message
         super().__init__(message)
+
+
+_PUBLIC_UPSTREAM_MESSAGES = {
+    "invalid_model": "The provider model is invalid",
+    "upstream_error": "The upstream provider rejected the request",
+    "upstream_invalid_response": "The upstream LLM returned an invalid response",
+    "upstream_invalid_stream": "The upstream LLM returned an invalid stream",
+    "upstream_response_too_large": "The upstream LLM response exceeded the configured size limit",
+    "upstream_timeout": "The upstream LLM request timed out",
+    "upstream_unavailable": "The upstream LLM is unavailable",
+}
+
+
+def public_upstream_error(error_type: str) -> tuple[str, str]:
+    """Return a bounded client-safe error without reflecting provider text."""
+
+    safe_type = error_type if error_type in _PUBLIC_UPSTREAM_MESSAGES else "upstream_error"
+    return safe_type, _PUBLIC_UPSTREAM_MESSAGES[safe_type]
 
 
 async def read_bounded_json(response: httpx.Response, max_bytes: int) -> Any:
@@ -47,23 +68,54 @@ async def read_bounded_json(response: httpx.Response, max_bytes: int) -> Any:
             )
     try:
         return json.loads(content)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise LLMUpstreamError(
             "upstream_invalid_response", "The upstream LLM returned a non-JSON response"
         ) from exc
 
 
 async def bounded_sse_lines(response: httpx.Response, max_bytes: int) -> AsyncIterator[str]:
-    """Yield SSE lines while bounding the complete streamed provider response."""
+    """Bound bytes before buffering lines, including streams without newlines."""
     received = 0
-    async for line in response.aiter_lines():
-        received += len(line.encode("utf-8")) + 1
+    pending = ""
+    skip_lf = False
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    async for chunk in response.aiter_bytes():
+        received += len(chunk)
         if received > max_bytes:
             raise LLMUpstreamError(
                 "upstream_response_too_large",
                 "The upstream LLM stream exceeded the configured size limit",
             )
-        yield line
+        try:
+            text = decoder.decode(chunk)
+        except UnicodeError as exc:
+            raise LLMUpstreamError("upstream_invalid_stream", "Invalid SSE encoding") from exc
+        if skip_lf and text:
+            if text.startswith("\n"):
+                text = text[1:]
+            skip_lf = False
+        # SSE recognizes LF, CR and CRLF. Preserve a CR split across chunks.
+        start = 0
+        index = 0
+        while index < len(text):
+            if text[index] in "\r\n":
+                yield pending + text[start:index]
+                pending = ""
+                if text[index] == "\r":
+                    if index + 1 == len(text):
+                        skip_lf = True
+                    elif text[index + 1] == "\n":
+                        index += 1
+                start = index + 1
+            index += 1
+        pending += text[start:]
+    try:
+        pending += decoder.decode(b"", final=True)
+    except UnicodeError as exc:
+        raise LLMUpstreamError("upstream_invalid_stream", "Invalid SSE encoding") from exc
+    if pending:
+        yield pending
 
 
 async def bounded_sse_data(response: httpx.Response, max_bytes: int) -> AsyncIterator[str]:
@@ -97,6 +149,10 @@ async def bounded_sse_data(response: httpx.Response, max_bytes: int) -> AsyncIte
 
 class LLMClient:
     accepts_privacy_checked_payload = True
+    capabilities = TransportCapabilities(
+        accepts_checked_payload=True,
+        supports_streaming=True,
+    )
 
     def __init__(
         self,
@@ -112,6 +168,30 @@ class LLMClient:
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max(max_response_bytes, 1_024)
         self.transport = transport
+        self._client: httpx.AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
+        self._closed = False
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._closed:
+            raise LLMUpstreamError("upstream_unavailable", "The upstream client is closed")
+        if self._client is None:
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = httpx.AsyncClient(
+                        timeout=self.timeout_seconds,
+                        transport=self.transport,
+                        limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
+                        follow_redirects=False,
+                        trust_env=False,
+                    )
+        return self._client
+
+    async def aclose(self) -> None:
+        self._closed = True
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     def prepare_request(
         self, payload: dict[str, Any], *, stream: bool = False
@@ -125,35 +205,32 @@ class LLMClient:
         # Direct library callers still receive the same final guard. Application
         # flows prepare their checked payload with the request vault so known
         # opaque tokens can be approved explicitly.
-        detector = LegacyEntityDetectorAdapter(
-            DetectorEnsemble(profile=DetectorProfile.STRICT)
-        )
+        detector = DetectorEnsemble(profile=DetectorProfile.STRICT)
         return FinalWirePrivacyGuard(detector).check(
             provider="openai-compatible-chat",
             target="/chat/completions",
             payload=payload,
         )
 
-    async def complete(
-        self, payload: PrivacyCheckedPayload | dict[str, Any]
-    ) -> UpstreamResult:
+    async def complete(self, payload: PrivacyCheckedPayload | dict[str, Any]) -> UpstreamResult:
         checked = self._checked(payload)
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
-                transport=self.transport,
-            ) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}{checked.target or '/chat/completions'}",
-                    headers=headers,
-                    content=checked.body,
-                ) as response:
-                    response_payload = await read_bounded_json(response, self.max_response_bytes)
-                    return UpstreamResult(response.status_code, response_payload)
+            client = await self._get_client()
+            request = httpx.Request(
+                "POST",
+                f"{self.base_url}{checked.target or '/chat/completions'}",
+                headers=headers,
+                content=checked.body,
+            )
+            response = await client.send(request, stream=True, follow_redirects=False)
+            try:
+                response_payload = await read_bounded_json(response, self.max_response_bytes)
+                return UpstreamResult(response.status_code, response_payload)
+            finally:
+                await response.aclose()
         except LLMUpstreamError:
             raise
         except httpx.TimeoutException as exc:
@@ -174,38 +251,39 @@ class LLMClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds,
-                transport=self.transport,
-            ) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}{checked.target or '/chat/completions'}",
-                    headers=headers,
-                    content=checked.body,
-                ) as response:
-                    if response.is_error:
+            client = await self._get_client()
+            request = httpx.Request(
+                "POST",
+                f"{self.base_url}{checked.target or '/chat/completions'}",
+                headers=headers,
+                content=checked.body,
+            )
+            response = await client.send(request, stream=True, follow_redirects=False)
+            try:
+                if response.is_error:
+                    raise LLMUpstreamError(
+                        "upstream_error",
+                        "The upstream LLM rejected the streaming request",
+                    )
+                async for data in bounded_sse_data(response, self.max_response_bytes):
+                    data = data.strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        event = json.loads(data)
+                    except (ValueError, RecursionError) as exc:
                         raise LLMUpstreamError(
-                            "upstream_error",
-                            "The upstream LLM rejected the streaming request",
+                            "upstream_invalid_stream",
+                            "The upstream LLM returned malformed SSE JSON",
+                        ) from exc
+                    if not isinstance(event, dict):
+                        raise LLMUpstreamError(
+                            "upstream_invalid_stream",
+                            "The upstream LLM returned an invalid SSE event",
                         )
-                    async for data in bounded_sse_data(response, self.max_response_bytes):
-                        data = data.strip()
-                        if data == "[DONE]":
-                            return
-                        try:
-                            event = json.loads(data)
-                        except json.JSONDecodeError as exc:
-                            raise LLMUpstreamError(
-                                "upstream_invalid_stream",
-                                "The upstream LLM returned malformed SSE JSON",
-                            ) from exc
-                        if not isinstance(event, dict):
-                            raise LLMUpstreamError(
-                                "upstream_invalid_stream",
-                                "The upstream LLM returned an invalid SSE event",
-                            )
-                        yield event
+                    yield event
+            finally:
+                await response.aclose()
         except LLMUpstreamError:
             raise
         except httpx.TimeoutException as exc:

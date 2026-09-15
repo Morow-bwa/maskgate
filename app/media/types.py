@@ -13,6 +13,19 @@ class MediaSanitizationError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class MediaContext:
+    """Trusted local policy scope for irreversible media sanitization."""
+
+    principal_id: str
+    tenant_id: str
+    application_id: str
+    purpose: str
+    jurisdiction: str
+    route: str
+    policy_revision: str
+
+
+@dataclass(frozen=True, slots=True)
 class MediaSanitizationResult:
     content: bytes
     media_type: str

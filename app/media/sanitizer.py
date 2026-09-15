@@ -7,8 +7,9 @@ from app.media.docx_sanitizer import DOCX_MEDIA_TYPE, DocxSanitizer
 from app.media.face_detection import FaceDetector, OpenCVFaceDetector
 from app.media.ocr import OCRAdapter, RapidOCRAdapter
 from app.media.text_redactor import TextRedactor
-from app.media.types import MediaSanitizationError, MediaSanitizationResult
+from app.media.types import MediaContext, MediaSanitizationError, MediaSanitizationResult
 from app.policies.policy_engine import PolicyEngine
+from app.privacy.runtime import PrivacyRuntime
 
 
 class MediaSanitizer:
@@ -22,9 +23,11 @@ class MediaSanitizer:
         *,
         ocr_adapter: OCRAdapter | None = None,
         face_detector: FaceDetector | None = None,
+        privacy_runtime: PrivacyRuntime | None = None,
     ) -> None:
         self.max_file_bytes = max(max_file_bytes, 1)
-        redactor = TextRedactor(detector, policy)
+        redactor = TextRedactor(detector, policy, privacy_runtime=privacy_runtime)
+        self.redactor = redactor
         self.docx = DocxSanitizer(redactor)
         self.image = None
         self.pdf = None
@@ -49,6 +52,7 @@ class MediaSanitizer:
         content: bytes,
         filename: str,
         declared_media_type: str | None,
+        context: MediaContext | None = None,
     ) -> MediaSanitizationResult:
         if not content:
             raise MediaSanitizationError("empty_file", "Uploaded file is empty")
@@ -57,13 +61,24 @@ class MediaSanitizer:
                 "file_too_large", "Uploaded file exceeds the file limit", 413
             )
 
+        if context is None:
+            return self._sanitize_by_type(content, filename, declared_media_type)
+        with self.redactor.use_media_context(context):
+            return self._sanitize_by_type(content, filename, declared_media_type)
+
+    def _sanitize_by_type(
+        self,
+        content: bytes,
+        filename: str,
+        declared_media_type: str | None,
+    ) -> MediaSanitizationResult:
         suffix = PurePath(filename or "").suffix.casefold()
         if suffix == ".docx" and content.startswith(b"PK"):
-            result = self.docx.sanitize(content, filename)
-            return self._validated_output(result)
+            return self._validated_output(self.docx.sanitize(content, filename))
         if declared_media_type == DOCX_MEDIA_TYPE and content.startswith(b"PK"):
-            result = self.docx.sanitize(content, filename or "document.docx")
-            return self._validated_output(result)
+            return self._validated_output(
+                self.docx.sanitize(content, filename or "document.docx")
+            )
         if content.startswith(b"%PDF-"):
             if self.pdf is None:
                 raise MediaSanitizationError(
@@ -71,8 +86,7 @@ class MediaSanitizer:
                     "PDF anonymization requires the maskgate[media] extra",
                     503,
                 )
-            result = self.pdf.sanitize(content, filename or "document.pdf")
-            return self._validated_output(result)
+            return self._validated_output(self.pdf.sanitize(content, filename or "document.pdf"))
         if self._looks_like_image(content):
             if self.image is None:
                 raise MediaSanitizationError(
@@ -80,8 +94,7 @@ class MediaSanitizer:
                     "Image anonymization requires the maskgate[media] extra",
                     503,
                 )
-            result = self.image.sanitize(content, filename or "image")
-            return self._validated_output(result)
+            return self._validated_output(self.image.sanitize(content, filename or "image"))
         raise MediaSanitizationError(
             "unsupported_media_type",
             "Supported file types are DOCX, PDF, PNG, JPEG, WEBP, TIFF, and BMP",

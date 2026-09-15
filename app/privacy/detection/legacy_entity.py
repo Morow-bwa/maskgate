@@ -19,6 +19,13 @@ class LegacyEntityDetectorAdapter:
     ) -> list[PrivacyDetection]:
         return self.detector.detect(text, context)
 
+    @property
+    def profile(self):
+        return self.detector.profile
+
+    def capabilities(self):
+        return self.detector.capabilities()
+
     def detect(
         self,
         text: str,

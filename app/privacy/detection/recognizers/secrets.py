@@ -31,14 +31,13 @@ _CONNECTION_KV = re.compile(
     r"(?i)(?<!\w)(?:server|host|data source)\s*=\s*[^;\r\n]{1,200};"
     r"[^\r\n]{0,500}?(?:password|pwd)\s*=\s*[^;\s\r\n]{1,200}"
 )
-_PRIVATE_KEY_HEADER = re.compile(
-    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
-)
+_PRIVATE_KEY_HEADER = re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----")
 
 
 class SecretRecognizer:
     name = "structured-secrets"
     profiles = frozenset(DetectorProfile)
+    capabilities = frozenset({"CONNECTION_STRING", "JWT", "PRIVATE_KEY"})
 
     def recognize(
         self,

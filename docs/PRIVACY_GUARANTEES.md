@@ -19,11 +19,14 @@ DLP product and does not claim complete PII detection.
   fail closed on runtime-supported paths.
 - Raw prompts, originals, mappings, inbound authorization, and provider credentials are excluded
   from structured application logs and privacy metrics.
+- Provider exception text is never reflected to clients. Public upstream errors use a bounded
+  local type/message registry, and provider output is inspected through literal and decoded views.
 
 ## Covered by tests
 
-- Exact `httpx.MockTransport` bytes for OpenAI-compatible Chat and Gemini `generateContent` contain
-  no fixture original and equal the canonical bytes returned by the final guard.
+- Exact `httpx.MockTransport` bytes for OpenAI-compatible Chat, OpenAI Responses, and Gemini
+  `generateContent` contain no fixture original and equal the canonical bytes returned by the final
+  guard.
 - Text in messages, object keys, nested metadata, tool descriptions, tool arguments, and structured
   JSON strings is transformed or blocked.
 - Split tokens, multiple stream choices, refusal, legacy function arguments, modern tool arguments,
@@ -37,10 +40,12 @@ Coverage applies to fixtures and documented data surfaces, not every possible re
 
 ## Best-effort detection
 
-Detection uses bounded Unicode canonicalization, regex recognizers, context, and selected algorithm
-validators. OCR and frontal-face detection are local. These methods can miss unusual names,
-addresses, distorted text, novel secrets, indirect identifiers, low-quality scans, or non-frontal
-faces. The synthetic evaluation corpus is reproducible evidence, not a production recall estimate.
+Detection uses bounded Unicode canonicalization, regex recognizers, deterministic RU/UK/EN locale
+packs, context, and selected algorithm validators. OCR and frontal-face detection are local. These
+methods can miss unusual or inflected names and locations, organizations without legal forms,
+free-form addresses, transliteration, mixed scripts, distorted text, novel secrets, indirect
+identifiers, low-quality scans, or non-frontal faces. The 598-case synthetic evaluation corpus is
+reproducible regression evidence built from only 49 templates, not a production recall estimate.
 
 ## Operator responsibility
 
@@ -60,3 +65,13 @@ faces. The synthetic evaluation corpus is reproducible evidence, not a productio
   embedded document objects.
 - Shared/distributed vault state, multi-worker conversation consistency, regulatory certification,
   or legal compliance determination.
+- OpenAI Responses streaming, built-in/remote provider tools, provider-managed state, annotations,
+  media, citations, non-empty logprobs, and undocumented Responses output item types.
+
+## Semantic risk advisory
+
+`SemanticPrivacyRiskAnalyzer` is a bounded local heuristic API for combinations such as precise
+age, rare role, small location, and unique employer. It returns findings and age/date
+generalization candidates. It never changes user text by itself: `apply_generalizations` requires
+an explicit set of policy-authorized feature types. This is an architecture seam and deterministic
+first implementation, not broad language understanding or proof against re-identification.
