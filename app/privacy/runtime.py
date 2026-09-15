@@ -7,6 +7,7 @@ from app.identity import PrincipalContext
 from app.masking.anonymizer import MaskingSession
 from app.masking.detector import Entity
 from app.observability import PrivacyMetric, PrivacyMetrics, PrivacyStage
+from app.privacy.approvals import ScopedApproval
 from app.privacy.detection import DetectorEnsemble
 from app.privacy.models import (
     DetectionContext,
@@ -28,6 +29,7 @@ class PrivacyRequestContext:
     jurisdiction: str
     purpose: str
     token_scope: TokenScope
+    policy_revision: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +38,7 @@ class PrivacyTransformResult:
     detections: tuple[PrivacyDetection, ...]
     decisions: tuple[PolicyDecision, ...]
     risk: RiskAssessment
-    approved_originals: tuple[str, ...]
+    approvals: tuple[ScopedApproval, ...]
 
 
 class PrivacyRuntime:
@@ -53,6 +55,10 @@ class PrivacyRuntime:
         self.risk_engine = risk_engine
         self.policy_engine = policy_engine
         self.metrics = metrics
+
+    @property
+    def policy_revision(self) -> str:
+        return self.policy_engine.version
 
     def transform_text(
         self,
@@ -134,9 +140,31 @@ class PrivacyRuntime:
             [decision.action for decision in decisions],
         )
         self.metrics.observe(PrivacyStage.TOKENIZATION, time.perf_counter() - started)
-        approved = tuple(
-            entity.text
+        approvals = tuple(
+            ScopedApproval.issue(
+                value=entity.text,
+                entity_type=entity.type,
+                principal_id=principal.vault_namespace,
+                application_id=principal.application_id,
+                route=request.route,
+                provider=request.provider,
+                direction=PrivacyDirection.INPUT,
+                purpose=request.purpose,
+                source_path=json_path,
+                wire_path=json_path,
+                policy_revision=request.policy_revision,
+                expires_at_epoch=(
+                    decision.expires_at.timestamp()
+                    if decision.expires_at is not None
+                    else time.time() + 300
+                ),
+                decision_id=(
+                    f"assertion:{decision.assertion_id}"
+                    if decision.assertion_id is not None
+                    else f"rule:{decision.rule_id or 'default'}"
+                ),
+            )
             for entity, decision in zip(entities, decisions, strict=True)
             if decision.action is PrivacyAction.ALLOW
         )
-        return PrivacyTransformResult(transformed, detections, decisions, risk, approved)
+        return PrivacyTransformResult(transformed, detections, decisions, risk, approvals)

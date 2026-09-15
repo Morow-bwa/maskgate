@@ -282,9 +282,22 @@ def main() -> None:
         choices=[item.value for item in DetectorProfile],
         default=DetectorProfile.STRICT.value,
     )
+    parser.add_argument("--summary", action="store_true", help="Print aggregate counts only")
+    parser.add_argument("--fail-on-errors", action="store_true", help="Fail on any corpus mismatch")
     args = parser.parse_args()
     detector = DetectorEnsemble(profile=DetectorProfile(args.profile))
-    print(evaluate(detector, load_corpus(args.corpus)).to_json())
+    report = evaluate(detector, load_corpus(args.corpus))
+    false_positive = sum(metric.false_positive for metric in report.per_entity.values())
+    false_negative = sum(metric.false_negative for metric in report.per_entity.values())
+    if args.summary:
+        print(
+            f"Corpus: {report.case_count} cases; false positives={false_positive}; "
+            f"false negatives={false_negative}"
+        )
+    else:
+        print(report.to_json())
+    if args.fail_on_errors and (not report.case_count or false_positive or false_negative):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

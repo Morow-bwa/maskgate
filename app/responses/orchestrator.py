@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, replace
 from typing import Any
 
-from app.chat.orchestrator import error_payload
+from app.api import error_payload
 from app.config import Settings
 from app.identity import PrincipalContext
 from app.masking.anonymizer import MaskingSession
 from app.policies.policy_engine import PolicyBlocked, PolicyEngine
+from app.privacy.approvals import ApprovalContext, ScopedApproval
 from app.privacy.ir import (
     CanonicalRequest,
     StructuredContent,
@@ -18,7 +20,7 @@ from app.privacy.ir import (
     ToolResult,
     Turn,
 )
-from app.privacy.models import TokenScope
+from app.privacy.models import DetectionContext, PrivacyDirection, TokenScope
 from app.privacy.output_guard import OutputPrivacyGuard
 from app.privacy.pipeline import ProviderOutputViolation
 from app.privacy.runtime import PrivacyRequestContext, PrivacyRuntime
@@ -80,7 +82,7 @@ class OpenAIResponsesOrchestrator:
             max_mappings=self._settings.conversation_max_mappings,
             max_sensitive_bytes=self._settings.conversation_max_sensitive_bytes,
         )
-        allowlisted_values: list[str] = []
+        approvals: list[ScopedApproval] = []
         try:
             canonical = self._adapter.from_wire(payload)
             if canonical.stream:
@@ -93,19 +95,38 @@ class OpenAIResponsesOrchestrator:
                 canonical,
                 session=session,
                 principal=principal,
-                allowlisted_values=allowlisted_values,
+                approvals=approvals,
             )
             wire_payload = self._adapter.to_wire(transformed)
             replacements = {item.replacement for item in session.items}
             approved_tokens = {
                 value for value in replacements if OPAQUE_TOKEN_PATTERN.fullmatch(value)
             }
+            now_epoch = time.time()
+            approval_context = ApprovalContext(
+                principal_id=principal.vault_namespace,
+                application_id=principal.application_id,
+                route="/v1/responses",
+                provider=self._adapter.name,
+                direction=PrivacyDirection.INPUT,
+                purpose=self._settings.default_purpose,
+                policy_revision=self._privacy_runtime.policy_revision,
+                now_epoch=now_epoch,
+            )
+            if any(not approval.scope_matches(approval_context) for approval in approvals):
+                raise WirePrivacyViolation("scoped approval does not match the active operation")
+            wire_approvals = tuple(
+                self._bind_response_approval(approval, wire_payload)
+                for approval in approvals
+            )
             checked = self._wire_guard.check(
                 provider=self._adapter.name,
                 target="/responses",
                 payload=wire_payload,
                 approved_tokens=approved_tokens,
-                approved_values=(replacements - approved_tokens) | set(allowlisted_values),
+                approved_values=replacements - approved_tokens,
+                scoped_approvals=wire_approvals,
+                approval_context=approval_context,
             )
         except ProviderAdapterError:
             return self._error(
@@ -117,14 +138,14 @@ class OpenAIResponsesOrchestrator:
                 "privacy_policy_block",
                 "A provider protocol identifier contains sensitive data",
             )
-        except PolicyBlocked:
-            return self._error(400, "privacy_policy_block", "Sensitive data was blocked by policy")
         except WirePrivacyViolation:
             return self._error(
                 400,
                 "wire_privacy_violation",
                 "Final wire privacy validation rejected the provider request",
             )
+        except PolicyBlocked:
+            return self._error(400, "privacy_policy_block", "Sensitive data was blocked by policy")
 
         try:
             result = await self._upstream.complete(checked)
@@ -155,7 +176,7 @@ class OpenAIResponsesOrchestrator:
         *,
         session: MaskingSession,
         principal: PrincipalContext,
-        allowlisted_values: list[str],
+        approvals: list[ScopedApproval],
     ) -> CanonicalRequest:
         privacy_request = PrivacyRequestContext(
             route="/v1/responses",
@@ -164,6 +185,7 @@ class OpenAIResponsesOrchestrator:
             jurisdiction=self._settings.jurisdiction,
             purpose=self._settings.default_purpose,
             token_scope=TokenScope.REQUEST,
+            policy_revision=self._privacy_runtime.policy_revision,
         )
 
         def transform_text(
@@ -179,7 +201,7 @@ class OpenAIResponsesOrchestrator:
                 json_path=path,
                 role=role,
             )
-            allowlisted_values.extend(result.approved_originals)
+            approvals.extend(result.approvals)
             return result.text
 
         def identifier(text: str, path: tuple[str | int, ...]) -> str:
@@ -294,6 +316,70 @@ class OpenAIResponsesOrchestrator:
             stream=False,
             store=False,
         )
+
+    def _bind_response_approval(
+        self,
+        approval: ScopedApproval,
+        payload: dict[str, Any],
+    ) -> ScopedApproval:
+        candidates: list[tuple[str | int, ...]] = []
+
+        def inspect(value: Any, path: tuple[str | int, ...]) -> None:
+            if isinstance(value, str):
+                if not self._response_path_preserves(approval.source_path, path):
+                    return
+                detections = self._privacy_runtime.detector.analyze(
+                    value,
+                    DetectionContext(
+                        profile=self._privacy_runtime.detector.profile,
+                        json_path=path,
+                        direction=PrivacyDirection.INPUT,
+                    ),
+                )
+                if any(
+                    approval.matches_value(
+                        value[detection.start : detection.end],
+                        detection.entity_type,
+                    )
+                    for detection in detections
+                ):
+                    candidates.append(path)
+                return
+            if isinstance(value, list):
+                for index, item in enumerate(value):
+                    inspect(item, (*path, index))
+                return
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    inspect(item, (*path, key))
+
+        inspect(payload, ())
+        if len(candidates) != 1:
+            raise WirePrivacyViolation(
+                "Responses serialization cannot preserve scoped approval provenance"
+            )
+        return approval.bind_to_wire(
+            provider=self._adapter.name,
+            wire_path=candidates[0],
+        )
+
+    @staticmethod
+    def _response_path_preserves(
+        source: tuple[str | int, ...],
+        wire: tuple[str | int, ...],
+    ) -> bool:
+        if source and source[0] == "turns" and source[-1:] == ("text",):
+            return wire == ("instructions",) or (
+                len(wire) >= 5
+                and wire[0] == "input"
+                and wire[-3] == "content"
+                and wire[-1] == "text"
+            )
+        if len(source) >= 3 and source[:1] == ("tools",):
+            return wire == source
+        if source[:2] == ("text", "format"):
+            return wire == source
+        return False
 
     @staticmethod
     def _error(status_code: int, error_type: str, message: str) -> ResponsesExecution:

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from app.identity import PrincipalContext
 from app.masking.anonymizer import MappingItem, MaskingSession
+from app.observability import PrivacyMetric, PrivacyMetrics, PrivacyStage
+from app.privacy.approvals import ApprovalContext, ScopedApproval
+from app.privacy.models import PrivacyDirection
+from app.privacy.runtime import PrivacyRequestContext
 from app.providers import ProviderAdapter, ProviderAdapterError
 from app.providers.openai_chat import validate_chat_completion_response
+from app.proxy.contracts import TransportCapabilities
 
 from .output_guard import OutputPrivacyGuard
 from .wire import (
@@ -28,6 +35,8 @@ class PrivacyPipeline:
         *,
         ingress_adapter: ProviderAdapter | None = None,
         egress_adapter: ProviderAdapter | None = None,
+        transport_capabilities: TransportCapabilities | None = None,
+        metrics: PrivacyMetrics | None = None,
     ) -> None:
         self.upstream = upstream
         self.provider_name = provider_name
@@ -35,13 +44,22 @@ class PrivacyPipeline:
         self.output_guard = output_guard
         self.ingress_adapter = ingress_adapter
         self.egress_adapter = egress_adapter
+        self.transport_capabilities = transport_capabilities or TransportCapabilities(
+            accepts_checked_payload=bool(
+                getattr(upstream, "accepts_privacy_checked_payload", False)
+            ),
+            supports_streaming=callable(getattr(upstream, "complete_stream", None)),
+        )
+        self.metrics = metrics
 
     def prepare(
         self,
         payload: dict[str, Any],
         session: MaskingSession,
-        allowlisted_values: list[str],
+        approvals: list[ScopedApproval],
         *,
+        principal: PrincipalContext | None = None,
+        request_context: PrivacyRequestContext | None = None,
         stream: bool = False,
     ) -> PrivacyCheckedPayload:
         try:
@@ -70,14 +88,63 @@ class PrivacyPipeline:
             raise WirePrivacyViolation("provider adapter rejected the request") from exc
         replacements = {item.replacement for item in session.items}
         approved_tokens = {value for value in replacements if OPAQUE_TOKEN_PATTERN.fullmatch(value)}
-        approved_values = (replacements - approved_tokens) | set(allowlisted_values)
-        return self.wire_guard.check(
-            provider=provider,
-            target=target,
-            payload=wire_payload,
-            approved_tokens=approved_tokens,
-            approved_values=approved_values,
-        )
+        approved_values = replacements - approved_tokens
+        now_epoch = time.time()
+        wire_approvals: tuple[ScopedApproval, ...] = ()
+        wire_context: ApprovalContext | None = None
+        if approvals:
+            if principal is None or request_context is None:
+                raise WirePrivacyViolation(
+                    "scoped approvals require trusted operation context"
+                )
+            source_context = ApprovalContext(
+                principal_id=principal.vault_namespace,
+                application_id=principal.application_id,
+                route=request_context.route,
+                provider=request_context.provider,
+                direction=PrivacyDirection.INPUT,
+                purpose=request_context.purpose,
+                policy_revision=request_context.policy_revision,
+                now_epoch=now_epoch,
+            )
+            if any(not approval.scope_matches(source_context) for approval in approvals):
+                raise WirePrivacyViolation("scoped approval does not match the active operation")
+            if provider != "openai-chat-completions":
+                raise WirePrivacyViolation(
+                    "provider translation cannot preserve scoped approval provenance"
+                )
+            wire_approvals = tuple(
+                approval.bind_to_wire(provider=provider, wire_path=approval.source_path)
+                for approval in approvals
+            )
+            wire_context = ApprovalContext(
+                principal_id=principal.vault_namespace,
+                application_id=principal.application_id,
+                route=request_context.route,
+                provider=provider,
+                direction=PrivacyDirection.INPUT,
+                purpose=request_context.purpose,
+                policy_revision=request_context.policy_revision,
+                now_epoch=now_epoch,
+            )
+        started = time.perf_counter()
+        try:
+            return self.wire_guard.check(
+                provider=provider,
+                target=target,
+                payload=wire_payload,
+                approved_tokens=approved_tokens,
+                approved_values=approved_values,
+                scoped_approvals=wire_approvals,
+                approval_context=wire_context,
+            )
+        except WirePrivacyViolation:
+            if self.metrics is not None:
+                self.metrics.increment(PrivacyMetric.WIRE_REJECTIONS)
+            raise
+        finally:
+            if self.metrics is not None:
+                self.metrics.observe(PrivacyStage.WIRE_GUARD, time.perf_counter() - started)
 
     async def complete(self, checked: PrivacyCheckedPayload) -> Any:
         argument = checked if self._accepts_checked_payload else checked.payload
@@ -102,11 +169,20 @@ class PrivacyPipeline:
             yield event
 
     def process_output(self, payload: Any, mapping: list[MappingItem]) -> Any:
-        return self.output_guard.process(payload, mapping)
+        started = time.perf_counter()
+        try:
+            return self.output_guard.process(payload, mapping)
+        except (ValueError, RecursionError) as exc:
+            if self.metrics is not None:
+                self.metrics.increment(PrivacyMetric.OUTPUT_FAILURES)
+            raise ProviderOutputViolation from exc
+        finally:
+            if self.metrics is not None:
+                self.metrics.observe(PrivacyStage.OUTPUT_GUARD, time.perf_counter() - started)
 
     @property
     def _accepts_checked_payload(self) -> bool:
-        return bool(getattr(self.upstream, "accepts_privacy_checked_payload", False))
+        return self.transport_capabilities.accepts_checked_payload
 
 
 class ProviderOutputViolation(ValueError):

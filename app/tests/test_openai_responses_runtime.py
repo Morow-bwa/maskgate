@@ -8,11 +8,101 @@ from pathlib import Path
 import httpx
 from fastapi.testclient import TestClient
 
+from app.identity import DefaultPrincipalResolver
 from app.main import create_app
+from app.privacy.policy import hash_public_value
 from app.providers import OpenAIResponsesAdapter
 from app.proxy.llm_client import LLMClient
 
 TOKEN = re.compile(r"<MG:[A-Z2-7]{26}>")
+
+
+def test_responses_public_allow_is_scoped_to_principal_and_wire_path(
+    settings,
+    tmp_path: Path,
+) -> None:
+    requests: list[bytes] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        requests.append(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_scoped",
+                "object": "response",
+                "status": "completed",
+                "output": [],
+            },
+            request=request,
+        )
+
+    first_key = "responses-tenant-a"
+    first_principal = DefaultPrincipalResolver(settings.application_id).resolve(
+        authorization=f"Bearer {first_key}",
+        client_host="testclient",
+    )
+    value = "press@example.org"
+    policy_path = tmp_path / "responses-policy.yaml"
+    policy_path.write_text(
+        f"""
+version: 2
+defaults:
+  action: BLOCK
+  reason: unmatched_data
+rules:
+  - id: tokenize-email
+    priority: 10
+    action: TOKENIZE
+    reason: private_email
+    conditions:
+      entity_types: [EMAIL]
+public_data_assertions:
+  - id: published-responses-address
+    entity_type: EMAIL
+    value_sha256: {hash_public_value("EMAIL", value)}
+    action: ALLOW
+    reason: published_contact
+    scope:
+      tenants: [{first_principal.tenant_id}]
+      applications: [{settings.application_id}]
+      routes: [/v1/responses]
+      directions: [INPUT]
+      providers: [openai-responses]
+      purposes: [{settings.default_purpose}]
+    expires_at: 2099-01-01T00:00:00Z
+    provenance: https://example.org/contact
+""".strip(),
+        encoding="utf-8",
+    )
+    upstream = LLMClient(
+        "https://api.openai.invalid/v1",
+        "synthetic-provider-key",
+        transport=httpx.MockTransport(provider),
+    )
+    configured = replace(
+        settings,
+        llm_provider="openai",
+        api_keys=(first_key, "responses-tenant-b"),
+        policy_v2_file=policy_path,
+    )
+
+    with TestClient(create_app(configured, llm_client=upstream)) as client:
+        allowed = client.post(
+            "/v1/responses",
+            headers={"Authorization": f"Bearer {first_key}"},
+            json={"model": "gpt-test", "input": f"Contact {value}"},
+        )
+        other = client.post(
+            "/v1/responses",
+            headers={"Authorization": "Bearer responses-tenant-b"},
+            json={"model": "gpt-test", "input": f"Contact {value}"},
+        )
+
+    assert allowed.status_code == 200
+    assert other.status_code == 200
+    assert value.encode() in requests[0]
+    assert value.encode() not in requests[1]
+    assert TOKEN.search(requests[1].decode())
 
 
 def test_responses_adapter_preserves_plain_function_output_text() -> None:

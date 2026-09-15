@@ -50,6 +50,7 @@ class FakeStreamingLLMClient:
                 "object": "chat.completion.chunk",
                 "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
             }
+        yield {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
 
 
 class ToolHistoryLLMClient:
@@ -153,6 +154,7 @@ public_data_assertions:
     client = TestClient(create_app(configured, llm_client=upstream))
     request = {
         "model": "gpt-test",
+        "conversation_id": "scoped-public-history-1",
         "messages": [{"role": "user", "content": f"Contact {public_email}"}],
     }
 
@@ -166,12 +168,23 @@ public_data_assertions:
         headers={"Authorization": "Bearer tenant-b-key"},
         json=request,
     )
+    continuation = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {first_key}"},
+        json={
+            "model": "gpt-test",
+            "conversation_id": "scoped-public-history-1",
+            "messages": [{"role": "user", "content": "Continue"}],
+        },
+    )
 
     assert first.status_code == 200
     assert second.status_code == 200
+    assert continuation.status_code == 200
     assert public_email in str(upstream.payloads[0])
     assert public_email not in str(upstream.payloads[1])
     assert re.search(r"<MG:[A-Z2-7]{26}>", str(upstream.payloads[1]))
+    assert public_email not in str(upstream.payloads[2])
 
 
 def test_conversation_history_preserves_safe_tool_calls_without_originals(settings) -> None:
@@ -563,7 +576,11 @@ def test_playground_preview_does_not_call_unconfigured_provider(settings, playgr
     assert api_response.json()["error"]["type"] == "provider_not_configured"
     readiness = client.get("/health/ready")
     assert readiness.status_code == 503
-    assert readiness.json() == {"status": "not_ready", "provider_ready": False}
+    assert readiness.json() == {
+        "status": "not_ready",
+        "provider_ready": False,
+        "admission_ready": True,
+    }
 
 
 def test_unsanitized_image_is_blocked_before_upstream(settings) -> None:

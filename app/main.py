@@ -10,11 +10,12 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from app.api import error_payload
+from app.application import AdmissionController
 from app.chat import (
     ChatOrchestrator,
     build_chat_router,
     build_playground_chat_router,
-    error_payload,
 )
 from app.config import Settings, provider_key_is_configured
 from app.debug.routes import build_debug_router
@@ -22,6 +23,7 @@ from app.identity import DefaultPrincipalResolver, PrincipalContext
 from app.logging_config import configure_logging
 from app.media.routes import build_media_router
 from app.media.sanitizer import MediaSanitizer
+from app.media.upload_boundary import configure_strict_multipart_memory
 from app.observability import PrivacyMetrics
 from app.policies.policy_engine import PolicyEngine
 from app.privacy.detection import (
@@ -42,11 +44,14 @@ from app.providers import (
     OpenAIChatCompletionsAdapter,
     OpenAIResponsesAdapter,
 )
+from app.proxy.contracts import TransportCapabilities
 from app.proxy.gemini_client import GeminiClient
 from app.proxy.llm_client import LLMClient
 from app.responses import OpenAIResponsesOrchestrator, build_responses_router
 from app.security import (
+    AdmissionMiddleware,
     FixedWindowRateLimiter,
+    OperationDeadlineMiddleware,
     RequestBodyLimitMiddleware,
     bearer_token_is_allowed,
     requires_proxy_auth,
@@ -67,6 +72,10 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     playground_dir = playground_dir or PLAYGROUND_DIR
+    if settings.strict_media_memory:
+        configure_strict_multipart_memory(
+            settings.max_media_file_bytes + 1024 * 1024,
+        )
     configure_logging(settings.log_level)
     privacy_detector = DetectorEnsemble(profile=DetectorProfile(settings.detector_profile))
     detector = LegacyEntityDetectorAdapter(privacy_detector)
@@ -99,6 +108,16 @@ def create_app(
         settings.conversation_max_messages,
         settings.conversation_max_chars,
         settings.conversation_max_count,
+        max_total_bytes=settings.conversation_global_max_bytes,
+        max_owner_bytes=settings.conversation_principal_max_bytes,
+        metrics=privacy_metrics,
+    )
+    admission = AdmissionController(
+        global_max_operations=settings.admission_global_max_operations,
+        principal_max_operations=settings.admission_principal_max_operations,
+        global_max_bytes=settings.admission_global_max_bytes,
+        principal_max_bytes=settings.admission_principal_max_bytes,
+        operation_max_bytes=settings.admission_operation_max_bytes,
     )
     media_sanitizer = MediaSanitizer(
         detector,
@@ -106,6 +125,7 @@ def create_app(
         settings.max_media_file_bytes,
         ocr_adapter=ocr_adapter,
         face_detector=face_detector,
+        privacy_runtime=privacy_runtime,
     )
     if llm_client is not None:
         upstream = llm_client
@@ -128,6 +148,17 @@ def create_app(
     if provider_name == "gemini" and not provider_secret:
         provider_secret = settings.llm_api_key
     provider_ready = llm_client is not None or provider_key_is_configured(provider_secret)
+    declared_capabilities = getattr(upstream, "capabilities", None)
+    transport_capabilities = (
+        declared_capabilities
+        if isinstance(declared_capabilities, TransportCapabilities)
+        else TransportCapabilities(
+            accepts_checked_payload=bool(
+                getattr(upstream, "accepts_privacy_checked_payload", False)
+            ),
+            supports_streaming=callable(getattr(upstream, "complete_stream", None)),
+        )
+    )
     wire_guard = FinalWirePrivacyGuard(privacy_detector)
     output_guard = OutputPrivacyGuard(privacy_detector)
     ensure_terminal_capabilities(
@@ -149,6 +180,8 @@ def create_app(
         output_guard,
         ingress_adapter=ingress_adapter,
         egress_adapter=egress_adapter,
+        transport_capabilities=transport_capabilities,
+        metrics=privacy_metrics,
     )
     responses_orchestrator = OpenAIResponsesOrchestrator(
         settings=settings,
@@ -178,6 +211,7 @@ def create_app(
         privacy_pipeline=privacy_pipeline,
         output_guard=output_guard,
         principal_resolver=principal_resolver,
+        transport_capabilities=transport_capabilities,
     )
 
     @asynccontextmanager
@@ -194,11 +228,15 @@ def create_app(
         try:
             yield
         finally:
+            admission.start_draining()
             sweeper.cancel()
             try:
                 await sweeper
             except asyncio.CancelledError:
                 pass
+            close_upstream = getattr(upstream, "aclose", None)
+            if close_upstream is not None:
+                await close_upstream()
 
     app = FastAPI(
         title="MaskGate",
@@ -215,6 +253,22 @@ def create_app(
         media_file_max_bytes=settings.max_media_file_bytes,
     )
     app.add_middleware(
+        AdmissionMiddleware,
+        controller=admission,
+        default_reservation_bytes=(
+            settings.max_request_body_bytes + settings.max_upstream_response_bytes
+        ),
+        media_reservation_bytes=(
+            2 * (settings.max_media_file_bytes + 1024 * 1024)
+        ),
+        metrics=privacy_metrics,
+    )
+    app.add_middleware(
+        OperationDeadlineMiddleware,
+        timeout_seconds=settings.operation_timeout_seconds,
+        metrics=privacy_metrics,
+    )
+    app.add_middleware(
         TrustedHostMiddleware,
         allowed_hosts=list(settings.trusted_hosts),
     )
@@ -229,6 +283,7 @@ def create_app(
     app.state.privacy_runtime = privacy_runtime
     app.state.mapping_store = mapping_store
     app.state.conversation_store = conversation_store
+    app.state.admission = admission
     app.state.llm_client = upstream
     app.state.provider_ready = provider_ready
     app.state.media_sanitizer = media_sanitizer
@@ -313,13 +368,23 @@ def create_app(
 
     @app.get("/health/ready")
     async def readiness() -> JSONResponse:
-        if not provider_ready:
+        if not provider_ready or not admission.ready:
             return JSONResponse(
                 status_code=503,
-                content={"status": "not_ready", "provider_ready": False},
+                content={
+                    "status": "not_ready",
+                    "provider_ready": provider_ready,
+                    "admission_ready": admission.ready,
+                },
                 headers={"Cache-Control": "no-store"},
             )
-        return JSONResponse(content={"status": "ready", "provider_ready": True})
+        return JSONResponse(
+            content={
+                "status": "ready",
+                "provider_ready": True,
+                "admission_ready": True,
+            }
+        )
 
     app.include_router(build_chat_router(chat_orchestrator, request_principal))
     app.include_router(build_responses_router(responses_orchestrator, request_principal))
@@ -328,11 +393,27 @@ def create_app(
         build_media_router(
             media_sanitizer,
             max_concurrency=settings.media_max_concurrency,
+            purpose=settings.default_purpose,
+            jurisdiction=settings.jurisdiction,
+            policy_revision=privacy_runtime.policy_revision,
+            strict_memory=settings.strict_media_memory,
         )
     )
 
     if settings.enable_debug_endpoints:
         app.include_router(build_debug_router(detector, policy, settings.masking_mode))
+
+        @app.get("/debug/metrics")
+        async def operational_metrics() -> JSONResponse:
+            return JSONResponse(
+                content={
+                    "privacy": privacy_metrics.snapshot(),
+                    "admission": admission.snapshot(),
+                    "conversation_state": conversation_store.snapshot(),
+                    "request_mappings": mapping_store.size(),
+                },
+                headers={"Cache-Control": "no-store"},
+            )
 
     if settings.enable_playground and playground_dir.is_dir():
         app.mount(

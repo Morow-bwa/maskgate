@@ -41,3 +41,20 @@ A public e-mail or famous person's name is not globally safe. A public assertion
 An applicable `BLOCK` or `REQUIRE_REVIEW` rule takes precedence over an assertion. Assertions can
 relax routine tokenization, not contextual prohibitions. The old global environment allowlists
 remain a legacy API only and are not used by Policy v2 runtime decisions.
+
+At runtime an `ALLOW` assertion becomes a short-lived, request-local approval. The approval binds a
+value fingerprint to principal, application, route, provider, direction, purpose, source path,
+wire path, policy revision, expiry and decision ID. It is never stored in conversation history.
+If an adapter cannot preserve that provenance, the request is rejected instead of broadening the
+approval. MaskGate-generated placeholder replacements remain a separate, narrow wire exception.
+
+## Annotations and mandatory obligations
+
+`annotations` are informational decision metadata only. They do not send alerts, write an audit
+record or execute another side effect. The legacy `obligations` key is accepted only as an
+informational alias during migration. New policy files should use `annotations`.
+
+`mandatory_obligations` means enforcement is required before the decision can be honored. No
+mandatory obligation executors are implemented in this release, so any non-empty value is rejected
+when the policy is loaded. This prevents labels such as `alert_security_owner` from being mistaken
+for completed actions.

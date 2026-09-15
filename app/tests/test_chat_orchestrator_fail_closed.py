@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -16,6 +19,7 @@ from app.chat.orchestrator import (
 )
 from app.main import create_app
 from app.proxy.llm_client import LLMClient, UpstreamResult
+from app.schemas import ChatCompletionRequest
 
 
 def _success_payload(content: str = "Safe local response") -> dict[str, Any]:
@@ -96,6 +100,22 @@ class EmptyStreamUpstream(RecordingUpstream):
             "object": "chat.completion.chunk",
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
         }
+
+
+class BlockingRestoreUpstream(RecordingUpstream):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    async def complete(self, payload: dict[str, Any]) -> UpstreamResult:
+        self.complete_payloads.append(deepcopy(payload))
+        if len(self.complete_payloads) == 1:
+            self.started.set()
+            await asyncio.to_thread(self.release.wait)
+            token = payload["messages"][-1]["content"]
+            return UpstreamResult(200, _success_payload(token))
+        return UpstreamResult(200, _success_payload("Safe retry"))
 
 
 def _mock_llm_client(handler: httpx.MockTransport) -> LLMClient:
@@ -320,6 +340,141 @@ def test_invalid_conversation_id_is_rejected(settings, stream: bool) -> None:
         "message": PUBLIC_INVALID_CONVERSATION_ID_MESSAGE,
         "type": "invalid_conversation_id",
     }
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["nonstream", "stream"])
+def test_conflicting_header_and_body_conversation_ids_are_rejected(
+    settings,
+    stream: bool,
+) -> None:
+    upstream = RecordingUpstream()
+    client = TestClient(create_app(settings, llm_client=upstream))
+
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"X-MaskGate-Conversation-ID": "conversation-header-1"},
+        json={
+            "model": "test-model",
+            "conversation_id": "conversation-body-2",
+            "messages": [],
+            "stream": stream,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["type"] == "conflicting_conversation_id"
+    assert upstream.complete_payloads == []
+    assert upstream.stream_payloads == []
+    assert client.app.state.conversation_store.size() == 0
+
+
+def test_unstarted_stream_response_owns_no_conversation_state(settings) -> None:
+    app = create_app(settings, llm_client=RecordingUpstream())
+    request = ChatCompletionRequest.model_validate(
+        {
+            "model": "test-model",
+            "conversation_id": "unstarted-stream-1",
+            "messages": [{"role": "user", "content": "Safe"}],
+            "stream": True,
+        }
+    )
+
+    asyncio.run(app.state.chat_orchestrator.stream_chat(request))
+
+    assert app.state.conversation_store.size() == 0
+    assert app.state.mapping_store.size() == 0
+
+
+def test_unexpected_stream_setup_error_releases_ownership(
+    settings,
+    monkeypatch,
+) -> None:
+    upstream = RecordingUpstream()
+    app = create_app(settings, llm_client=upstream)
+    original = app.state.chat_orchestrator._privacy_runtime.transform_text
+    calls = [0]
+
+    def fail_once(*args: Any, **kwargs: Any):
+        calls[0] += 1
+        if calls[0] == 1:
+            raise ValueError("synthetic setup failure")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        app.state.chat_orchestrator._privacy_runtime,
+        "transform_text",
+        fail_once,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    conversation_id = "stream-setup-failure-1"
+
+    failed = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "conversation_id": conversation_id,
+            "messages": [{"role": "user", "content": "Safe first turn"}],
+            "stream": True,
+        },
+    )
+    retry = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "test-model",
+            "conversation_id": conversation_id,
+            "messages": [{"role": "user", "content": "Safe retry"}],
+        },
+    )
+
+    assert failed.status_code == 500
+    assert failed.json()["error"]["type"] == "internal_processing_error"
+    assert retry.status_code == 200
+    assert upstream.stream_payloads == []
+    assert len(upstream.complete_payloads) == 1
+    assert app.state.mapping_store.size() == 0
+
+
+def test_delete_during_provider_io_revokes_restore_and_commit(settings) -> None:
+    upstream = BlockingRestoreUpstream()
+    app = create_app(settings, llm_client=upstream)
+    conversation_id = "delete-during-provider-1"
+    with TestClient(app) as client, ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(
+            client.post,
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "conversation_id": conversation_id,
+                "messages": [{"role": "user", "content": "old.owner@example.com"}],
+            },
+        )
+        assert upstream.started.wait(timeout=2)
+        old_state = next(iter(app.state.conversation_store._items.values()))
+        owner_id = old_state.owner_id
+        app.state.conversation_store.delete(conversation_id, owner_id)
+        replacement = app.state.conversation_store.get_or_create(
+            conversation_id,
+            owner_id,
+            lambda: app.state.chat_orchestrator._new_masking_session(settings.masking_mode),
+        )
+        upstream.release.set()
+        revoked = pending.result(timeout=2)
+
+        assert revoked.status_code == 409
+        assert revoked.json()["error"]["type"] == "conversation_revoked"
+        assert "old.owner@example.com" not in revoked.text
+        assert replacement.generation != old_state.generation
+        assert replacement.messages == []
+
+        retry = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "test-model",
+                "conversation_id": conversation_id,
+                "messages": [{"role": "user", "content": "Safe retry"}],
+            },
+        )
+        assert retry.status_code == 200
 
 
 def test_invalid_conversation_delete_uses_public_error(

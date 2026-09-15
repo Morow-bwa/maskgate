@@ -476,7 +476,10 @@ def test_openai_stream_buffers_content_refusal_and_tool_argument_fragments(
                         {
                             "index": 0,
                             "id": "call_stream_synthetic",
-                            "function": {"arguments": f'{{"email":"{unsafe_prefix}'},
+                            "type": "function",
+                            "function": {
+                                "name": "inspect", "arguments": f'{{"email":"{unsafe_prefix}',
+                            },
                         }
                     ]
                 },
@@ -500,7 +503,6 @@ def test_openai_stream_buffers_content_refusal_and_tool_argument_fragments(
                     "tool_calls": [
                         {
                             "index": 0,
-                            "id": "call_stream_synthetic",
                             "function": {"arguments": f'{unsafe_suffix}"}}'},
                         }
                     ]
@@ -510,14 +512,15 @@ def test_openai_stream_buffers_content_refusal_and_tool_argument_fragments(
                 "index": 2,
                 "delta": {
                     "function_call": {
-                        "name": "legacy_synthetic",
                         "arguments": f'{unsafe_suffix}"}}',
                     }
                 },
             },
             {"index": 3, "delta": {"refusal": unsafe_suffix}},
         ]
-        stream = _stream_event(first_choices) + _stream_event(second_choices) + "data: [DONE]\n\n"
+        terminal = [{"index": i, "delta": {}, "finish_reason": "stop"} for i in range(4)]
+        stream = (_stream_event(first_choices) + _stream_event(second_choices)
+                  + _stream_event(terminal) + "data: [DONE]\n\n")
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
@@ -566,6 +569,7 @@ def test_gemini_stream_buffers_fragmented_provider_text(settings: Any) -> None:
             + "\n\n"
             for fragment in fragments
         )
+        stream += 'data: {"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}\n\n'
         return httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},

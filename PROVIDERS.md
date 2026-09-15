@@ -12,7 +12,24 @@ input into IR and serializes IR to one provider body. The final wire guard runs 
 | OpenAI Responses | OpenAI Responses | yes | no (422) | yes |
 
 All built-in transports accept `PrivacyCheckedPayload`; they send its immutable bytes with no
-post-check serialization. Gemini credentials use `x-goog-api-key`, never URL query parameters.
+post-check serialization. Application-owned `httpx.AsyncClient` pools have explicit connection
+limits, redirects and environment proxies disabled, no cross-request provider cookies, and lifespan
+closure. Gemini credentials use `x-goog-api-key`, never URL query parameters.
+
+Strict Chat streaming requires a recognized finish reason for every observed choice. Missing
+finish, duplicate indexes within an event, negative/boolean indexes, post-finish data and explicit
+provider error events fail without a successful `[DONE]`. Tool IDs/names and arguments are
+accumulated before output inspection. Sparse indexes are preserved in client events; history
+deliberately selects choice 0. Replay compatibility is explicit: refusal-only output is normalized
+to replayable assistant
+content, while legacy `function_call`, incomplete/non-object tool arguments and unsupported terminal
+states reject before retention. Complete choices may end at transport EOF without an upstream
+`[DONE]`; MaskGate emits its own `[DONE]` only after checked finalization and any required commit.
+
+Scoped policy ALLOW provenance is preserved for OpenAI-compatible Chat and the reviewed Responses
+text paths. Gemini path translation currently rejects a request containing an ALLOW grant because
+that serializer does not yet expose a reviewed source-to-wire provenance map; ordinary tokenized
+requests remain supported.
 
 The Responses route is deliberately stateless and non-streaming. It forces `store: false`, rejects
 `previous_response_id`, built-in/remote tools, media, and unsupported output item types, and accepts

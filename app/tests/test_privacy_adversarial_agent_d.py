@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -537,9 +538,18 @@ def test_vault_enforces_sensitive_byte_budget() -> None:
 def test_conversation_character_budget_is_a_hard_retention_bound(settings) -> None:
     store = InMemoryConversationStore(ttl_seconds=60, max_chars=1_000)
     session = MaskingSession("placeholder", PolicyEngine(settings.policy_file))
-    state = store.get_or_create("conversation-agent-d", "tenant-agent-d", lambda: session)
+    lease = asyncio.run(
+        store.begin_turn(
+            "conversation-agent-d",
+            "tenant-agent-d",
+            lambda: session,
+            requested_mode="placeholder",
+        )
+    )
+    state = lease.state
 
-    store.commit(state, session, [{"role": "user", "content": "x" * 1_500}])
+    lease.commit(session, [{"role": "user", "content": "x" * 1_500}])
+    lease.close()
 
     retained_chars = sum(len(str(message.get("content", ""))) for message in state.messages)
     assert retained_chars <= 1_000

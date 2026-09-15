@@ -67,6 +67,14 @@ class InMemoryVault:
         with self._lock:
             return tuple(self._items)
 
+    @property
+    def estimated_bytes(self) -> int:
+        with self._lock:
+            return self._sensitive_bytes + sum(
+                len(item.replacement.encode("utf-8")) + len(item.entity_type.encode("utf-8"))
+                for item in self._items
+            )
+
     def find_original(self, original: str) -> MappingItem | None:
         with self._lock:
             return self._by_original.get(original)
@@ -114,6 +122,14 @@ class InMemoryVault:
             self._by_original = {item.original: item for item in retained}
             self._by_replacement = {item.replacement: item for item in retained}
             self._sensitive_bytes = sum(len(item.original.encode("utf-8")) for item in retained)
+
+    def clear(self) -> None:
+        """Revoke every mapping owned by this volatile vault."""
+        with self._lock:
+            self._items.clear()
+            self._by_original.clear()
+            self._by_replacement.clear()
+            self._sensitive_bytes = 0
 
     def __deepcopy__(self, memo: dict[int, Any]) -> InMemoryVault:
         with self._lock:

@@ -57,6 +57,10 @@ class MaskingSession:
     def items(self) -> list[MappingItem]:
         return list(self.vault.items)
 
+    @property
+    def estimated_bytes(self) -> int:
+        return self.vault.estimated_bytes
+
     def clone(self, *, policy: PolicyEngine | None = None) -> "MaskingSession":
         """Copy a vault so a blocked turn cannot partially mutate a conversation."""
         cloned = deepcopy(self)
@@ -68,6 +72,11 @@ class MaskingSession:
         """Drop originals whose reversible replacements are no longer referenced."""
 
         self.vault.prune_to_references(values)
+
+    def clear(self) -> None:
+        """Revoke all reversible originals held by this session."""
+        self.vault.clear()
+        self._placeholder_counters.clear()
 
     def _placeholder(self, entity_type: str) -> str:
         if self.mode == "placeholder":

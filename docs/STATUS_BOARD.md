@@ -1,5 +1,32 @@
 # Privacy engineering status board
 
+## Current local checkpoint — 2026-09-12 through 2026-09-13
+
+The Sol implementation pass added revocable conversation leases, setup-to-teardown ownership,
+stream replay validation, global/principal admission and pre-provider retained-state reservations,
+total deadlines,
+reusable closed transports, path-scoped policy approvals, explicit obligation semantics, contextual
+strict-memory media handling, dependency checks and fixed-label operational snapshots. The full
+local gate and exact receipt are recorded in
+`docs/implementation/2026-09-12/REVIEW_AND_EVIDENCE.md`.
+
+This remains a single-process educational privacy proxy. Live providers, Linux Docker behavior and
+remote CI were not verified by this local pass, and no independent second-agent audit was run.
+
+## Previous local checkpoint — 2026-09-06
+
+Baseline `102dcc2`: follow-up review reproduced encoded-key/size bypasses despite the earlier green
+suite. Local fixes and the project harness now pass 404 tests, 83.69% coverage, the 598-case strict
+corpus, frontend build and Chromium smoke. Encoded strings and keys fail closed on size/decode
+budget exhaustion; long protocol IDs have round-trip regressions; SSE byte limits apply before
+line buffering. See [security review](SECURITY_REVIEW_2026-09-06.md) and [harness](agent/README.md).
+
+These are local results. Docker/live-provider checks and new remote CI were not run. The historical
+independent-review statements below are not approvals of the current patch or general claims that
+no vulnerabilities remain.
+
+## Historical Phase 1 checkpoint
+
 | Issue | Severity | State | Evidence | Review |
 |---|---:|---|---|---|
 | Reversible surrogate collisions | P0 | fixed | uniqueness and vault bijection tests | independent red team passed |

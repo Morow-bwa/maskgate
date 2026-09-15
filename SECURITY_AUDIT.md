@@ -1,5 +1,10 @@
 # Security engineering review
 
+Historical review. See
+[the 2026-09-12 implementation evidence](docs/implementation/2026-09-12/REVIEW_AND_EVIDENCE.md)
+for the current lifecycle/resource/policy/media implementation and remaining limits, and
+[the 2026-09-06 review](docs/SECURITY_REVIEW_2026-09-06.md) for earlier terminal-boundary work.
+
 Date: 2026-08-13
 Phase 2 baseline: `60d0864`
 Scope: privacy runtime, provider Adapters/transports, vault/conversations, output/streaming, media,

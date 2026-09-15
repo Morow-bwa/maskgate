@@ -80,6 +80,7 @@ class Settings:
     trusted_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "testserver")
     max_media_file_bytes: int = 10 * 1024 * 1024
     media_max_concurrency: int = 2
+    strict_media_memory: bool = True
     conversation_max_count: int = 1_000
     max_upstream_response_bytes: int = 8 * 1024 * 1024
     conversation_max_mappings: int = 5_000
@@ -89,6 +90,15 @@ class Settings:
     default_purpose: str = "remote_llm_processing"
     detector_profile: str = "strict"
     policy_v2_file: Path | None = None
+    operation_timeout_seconds: float = 130.0
+    conversation_lock_timeout_seconds: float = 10.0
+    admission_global_max_operations: int = 32
+    admission_principal_max_operations: int = 4
+    admission_global_max_bytes: int = 384 * 1024 * 1024
+    admission_principal_max_bytes: int = 64 * 1024 * 1024
+    admission_operation_max_bytes: int = 32 * 1024 * 1024
+    conversation_global_max_bytes: int = 64 * 1024 * 1024
+    conversation_principal_max_bytes: int = 16 * 1024 * 1024
 
     def __post_init__(self) -> None:
         if self.is_production and not self.require_auth:
@@ -181,6 +191,7 @@ class Settings:
             trusted_hosts=_env_list("TRUSTED_HOSTS") or ("localhost", "127.0.0.1", "testserver"),
             max_media_file_bytes=max(_env_int("MAX_MEDIA_FILE_BYTES", 10 * 1024 * 1024), 1_024),
             media_max_concurrency=max(_env_int("MEDIA_MAX_CONCURRENCY", 2), 1),
+            strict_media_memory=_env_bool("STRICT_MEDIA_MEMORY", True),
             conversation_max_count=max(_env_int("CONVERSATION_MAX_COUNT", 1_000), 1),
             max_upstream_response_bytes=max(
                 _env_int("MAX_UPSTREAM_RESPONSE_BYTES", 8 * 1024 * 1024),
@@ -205,5 +216,38 @@ class Settings:
                 Path(os.environ["POLICY_V2_FILE"])
                 if os.getenv("POLICY_V2_FILE", "").strip()
                 else None
+            ),
+            operation_timeout_seconds=max(_env_int("OPERATION_TIMEOUT_SECONDS", 130), 1),
+            conversation_lock_timeout_seconds=max(
+                _env_int("CONVERSATION_LOCK_TIMEOUT_SECONDS", 10),
+                1,
+            ),
+            admission_global_max_operations=max(
+                _env_int("ADMISSION_GLOBAL_MAX_OPERATIONS", 32),
+                1,
+            ),
+            admission_principal_max_operations=max(
+                _env_int("ADMISSION_PRINCIPAL_MAX_OPERATIONS", 4),
+                1,
+            ),
+            admission_global_max_bytes=max(
+                _env_int("ADMISSION_GLOBAL_MAX_BYTES", 384 * 1024 * 1024),
+                1_024,
+            ),
+            admission_principal_max_bytes=max(
+                _env_int("ADMISSION_PRINCIPAL_MAX_BYTES", 64 * 1024 * 1024),
+                1_024,
+            ),
+            admission_operation_max_bytes=max(
+                _env_int("ADMISSION_OPERATION_MAX_BYTES", 32 * 1024 * 1024),
+                1_024,
+            ),
+            conversation_global_max_bytes=max(
+                _env_int("CONVERSATION_GLOBAL_MAX_BYTES", 64 * 1024 * 1024),
+                1_024,
+            ),
+            conversation_principal_max_bytes=max(
+                _env_int("CONVERSATION_PRINCIPAL_MAX_BYTES", 16 * 1024 * 1024),
+                1_024,
             ),
         )

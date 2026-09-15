@@ -1,13 +1,47 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 from app.privacy.detection import DetectorEnsemble
 from app.privacy.models import DetectorProfile
 from evaluation.evaluate_detection import evaluate, load_corpus
+from evaluation.evaluate_detection import main as evaluate_main
 
 CORPUS_ROOT = Path(__file__).parents[2] / "evaluation" / "corpus"
+
+
+def test_evaluation_gate_fails_on_mismatch_without_printing_fixture(monkeypatch, tmp_path, capsys):
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "corpus_version": "synthetic-test",
+            }
+        )
+    )
+    (tmp_path / "negative.jsonl").write_text(
+        json.dumps(
+            {
+                "id": "intentional-mismatch",
+                "text": "owner@example.com",
+                "entities": [],
+                "locale": "en",
+                "category": "negative",
+            }
+        )
+        + "\n"
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["evaluate", "--corpus", str(tmp_path), "--summary", "--fail-on-errors"]
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        evaluate_main()
+    assert exc_info.value.code == 1
+    assert "owner@example.com" not in capsys.readouterr().out
 
 
 def test_versioned_corpus_emits_reproducible_per_entity_metrics() -> None:
