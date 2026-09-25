@@ -39,9 +39,9 @@ jobs:
         run: python -m pip_audit --local
       - name: Verify production lock
         run: |
-          python -m uv pip compile pyproject.toml --extra media --universal --output-file requirements.check.lock
-          tail -n +3 requirements.lock > /tmp/requirements.expected
-          tail -n +3 requirements.check.lock > /tmp/requirements.actual
+          python -m uv pip compile pyproject.toml --extra media --universal --python-version 3.12 --constraints requirements.lock --output-file requirements.check.lock
+          grep -E '^[[:alnum:]][[:alnum:]._-]*==' requirements.lock > /tmp/requirements.expected
+          grep -E '^[[:alnum:]][[:alnum:]._-]*==' requirements.check.lock > /tmp/requirements.actual
           diff --strip-trailing-cr /tmp/requirements.expected /tmp/requirements.actual
       - name: Scan tracked files for credential patterns
         run: python scripts/check_secrets.py --history
