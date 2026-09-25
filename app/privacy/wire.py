@@ -1,21 +1,23 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from app.masking.detector import RegexDetector
 from app.policies.policy_engine import PolicyBlocked
+from app.privacy.approvals import ApprovalContext, ScopedApproval
+from app.privacy.detection import PrivacyDetector
+from app.privacy.encoded import (
+    MAX_ENCODED_TEXT_BYTES,
+    SCHEMA_KEYS,
+    EncodedContentViolation,
+    decoded_views,
+    is_protocol_id,
+)
+from app.privacy.models import DetectionContext, PrivacyDirection
 
 OPAQUE_TOKEN_PATTERN = re.compile(r"<MG:[A-Z2-7]{26}>")
-BASE64_PATTERN = re.compile(r"(?:[A-Za-z0-9+/]{4}){5,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
-BASE64URL_PATTERN = re.compile(r"[A-Za-z0-9_-]{24,}={0,2}")
-HEX_PATTERN = re.compile(r"(?:[0-9A-Fa-f]{2}){16,}")
-PERCENT_ESCAPE_PATTERN = re.compile(r"%[0-9A-Fa-f]{2}")
-UNICODE_ESCAPE_PATTERN = re.compile(r"\\u([0-9A-Fa-f]{4})")
-MAX_ENCODED_TEXT_BYTES = 64 * 1024
 _CHECKED_PAYLOAD_SEAL = object()
 
 
@@ -57,8 +59,16 @@ class PrivacyCheckedPayload:
 class FinalWirePrivacyGuard:
     """Inspect the exact JSON body immediately before remote transport."""
 
-    def __init__(self, detector: RegexDetector) -> None:
+    def __init__(
+        self,
+        detector: PrivacyDetector,
+        *,
+        max_structure_depth: int = 64,
+        max_nodes: int = 10_000,
+    ) -> None:
         self.detector = detector
+        self.max_structure_depth = max(max_structure_depth, 1)
+        self.max_nodes = max(max_nodes, 1)
 
     def check(
         self,
@@ -68,6 +78,8 @@ class FinalWirePrivacyGuard:
         target: str = "",
         approved_tokens: Iterable[str] = (),
         approved_values: Iterable[str] = (),
+        scoped_approvals: Iterable[ScopedApproval] = (),
+        approval_context: ApprovalContext | None = None,
     ) -> PrivacyCheckedPayload:
         if target and (
             not target.startswith("/")
@@ -79,6 +91,11 @@ class FinalWirePrivacyGuard:
             raise WirePrivacyViolation("provider request target is unsafe")
         token_set = frozenset(approved_tokens)
         value_set = frozenset(approved_values)
+        approval_set = tuple(scoped_approvals)
+        if approval_set and approval_context is None:
+            raise WirePrivacyViolation("scoped approvals require trusted operation context")
+        if approval_context is not None and approval_context.provider != provider:
+            raise WirePrivacyViolation("approval context does not match provider target")
         try:
             body = json.dumps(
                 payload,
@@ -87,12 +104,21 @@ class FinalWirePrivacyGuard:
                 separators=(",", ":"),
             ).encode("utf-8")
             actual = json.loads(body)
-        except (TypeError, ValueError, UnicodeError, json.JSONDecodeError) as exc:
+        except (TypeError, ValueError, UnicodeError, RecursionError) as exc:
             raise WirePrivacyViolation("provider payload is not canonical JSON") from exc
         if not isinstance(actual, dict):
             raise WirePrivacyViolation("provider payload must be a JSON object")
 
-        self._inspect(actual, (), provider, token_set, value_set)
+        self._inspect(
+            actual,
+            (),
+            provider,
+            token_set,
+            value_set,
+            approval_set,
+            approval_context,
+            work=[0],
+        )
         return PrivacyCheckedPayload(provider, target, body, _CHECKED_PAYLOAD_SEAL)
 
     def _inspect(
@@ -102,36 +128,94 @@ class FinalWirePrivacyGuard:
         provider: str,
         approved_tokens: frozenset[str],
         approved_values: frozenset[str],
+        scoped_approvals: tuple[ScopedApproval, ...],
+        approval_context: ApprovalContext | None,
+        encoded_depth: int = 0,
+        *,
+        structure_depth: int = 0,
+        work: list[int] | None = None,
     ) -> None:
+        if work is None:
+            work = [0]
+        work[0] += 1
+        if work[0] > self.max_nodes or structure_depth > self.max_structure_depth:
+            raise WirePrivacyViolation("provider payload exceeds structural inspection limits")
         if isinstance(value, str):
+            if len(value.encode("utf-8")) > MAX_ENCODED_TEXT_BYTES:
+                raise WirePrivacyViolation("encoded inspection size limit exceeded")
             for token in OPAQUE_TOKEN_PATTERN.findall(value):
                 if token not in approved_tokens:
                     raise WirePrivacyViolation(
                         f"unrecognized MaskGate token at {self._format_path(path)}"
                     )
-            for entity in self.detector.detect(value):
-                if entity.text not in approved_values:
+            for detection in self.detector.analyze(
+                value,
+                DetectionContext(
+                    profile=self.detector.profile,
+                    json_path=path,
+                    direction=PrivacyDirection.INPUT,
+                ),
+            ):
+                detected_value = value[detection.start : detection.end]
+                is_scoped = approval_context is not None and any(
+                    approval.approves(
+                        value=detected_value,
+                        entity_type=detection.entity_type,
+                        path=path,
+                        context=approval_context,
+                    )
+                    for approval in scoped_approvals
+                )
+                if detected_value not in approved_values and not is_scoped:
+                    label = "encoded" if encoded_depth else "unapproved"
                     raise WirePrivacyViolation(
-                        f"unapproved {entity.type} at {self._format_path(path)}"
+                        f"{label} {detection.entity_type} at {self._format_path(path)}"
                     )
             encoded_candidate = value
             for token in approved_tokens:
                 encoded_candidate = encoded_candidate.replace(token, "")
-            # JSON member names are still checked for direct PII and forged
-            # MaskGate tokens above. They are not opaque value containers:
-            # decoding ordinary protocol names such as ``additionalProperties``
-            # as Base64 creates false positives and breaks documented schemas.
-            if not path or path[-1] != "<key>":
+            try:
                 self._inspect_encoded(
                     encoded_candidate,
                     path,
                     approved_tokens,
                     approved_values,
+                    scoped_approvals,
+                    approval_context,
+                    encoded_depth,
+                    structure_depth=structure_depth,
+                    work=work,
+                    protocol=(
+                        (path and path[-1] == "<key>" and value in SCHEMA_KEYS)
+                        or (
+                            provider
+                            in {
+                                "openai-responses",
+                                "openai-compatible-chat",
+                                "openai-chat",
+                                "openai-chat-completions",
+                            }
+                            and is_protocol_id(value, path, output=False)
+                        )
+                    ),
                 )
+            except (EncodedContentViolation, UnicodeError) as exc:
+                raise WirePrivacyViolation("unsupported encoded content") from exc
             return
         if isinstance(value, list):
             for index, item in enumerate(value):
-                self._inspect(item, (*path, index), provider, approved_tokens, approved_values)
+                self._inspect(
+                    item,
+                    (*path, index),
+                    provider,
+                    approved_tokens,
+                    approved_values,
+                    scoped_approvals,
+                    approval_context,
+                    encoded_depth,
+                    structure_depth=structure_depth + 1,
+                    work=work,
+                )
             return
         if isinstance(value, dict):
             for key, item in value.items():
@@ -141,6 +225,11 @@ class FinalWirePrivacyGuard:
                     provider,
                     approved_tokens,
                     approved_values,
+                    scoped_approvals,
+                    approval_context,
+                    encoded_depth,
+                    structure_depth=structure_depth + 1,
+                    work=work,
                 )
                 self._inspect(
                     item,
@@ -148,14 +237,17 @@ class FinalWirePrivacyGuard:
                     provider,
                     approved_tokens,
                     approved_values,
+                    scoped_approvals,
+                    approval_context,
+                    encoded_depth,
+                    structure_depth=structure_depth + 1,
+                    work=work,
                 )
             return
         if isinstance(value, bool) or value is None:
             return
         if isinstance(value, (int, float)) and not self._is_safe_protocol_number(provider, path):
-            raise WirePrivacyViolation(
-                f"unclassified numeric value at {self._format_path(path)}"
-            )
+            raise WirePrivacyViolation(f"unclassified numeric value at {self._format_path(path)}")
 
     def _inspect_encoded(
         self,
@@ -163,61 +255,27 @@ class FinalWirePrivacyGuard:
         path: tuple[str | int, ...],
         approved_tokens: frozenset[str],
         approved_values: frozenset[str],
+        scoped_approvals: tuple[ScopedApproval, ...],
+        approval_context: ApprovalContext | None,
+        encoded_depth: int = 0,
+        *,
+        structure_depth: int = 0,
+        work: list[int] | None = None,
+        protocol: bool = False,
     ) -> None:
-        stripped = text.strip()
-        if not stripped or len(stripped.encode("utf-8")) > MAX_ENCODED_TEXT_BYTES:
-            return
-
-        if BASE64_PATTERN.fullmatch(stripped) or BASE64URL_PATTERN.fullmatch(stripped):
-            try:
-                padded = stripped + "=" * (-len(stripped) % 4)
-                decoder = (
-                    base64.urlsafe_b64decode
-                    if "-" in stripped or "_" in stripped
-                    else base64.b64decode
-                )
-                decoder(padded, validate=False) if decoder is base64.b64decode else decoder(padded)
-            except (ValueError, TypeError):
-                pass
-            else:
-                raise WirePrivacyViolation(
-                    f"unsupported encoded content at {self._format_path(path)}"
-                )
-
-        if HEX_PATTERN.fullmatch(stripped):
-            raise WirePrivacyViolation(f"unsupported encoded content at {self._format_path(path)}")
-
-        decoded_views: list[str] = []
-        if len(PERCENT_ESCAPE_PATTERN.findall(stripped)) >= 2:
-            from urllib.parse import unquote
-
-            decoded_views.append(unquote(stripped))
-        if UNICODE_ESCAPE_PATTERN.search(stripped):
-            decoded_views.append(
-                UNICODE_ESCAPE_PATTERN.sub(lambda match: chr(int(match.group(1), 16)), stripped)
+        for decoded in decoded_views(text, depth=encoded_depth, protocol=protocol):
+            self._inspect(
+                decoded,
+                (*path, "<decoded>"),
+                "encoded-json",
+                approved_tokens,
+                approved_values,
+                scoped_approvals,
+                approval_context,
+                encoded_depth + 1,
+                structure_depth=structure_depth + 1,
+                work=work,
             )
-        if stripped[:1] in {"{", "["}:
-            try:
-                nested = json.loads(stripped)
-            except json.JSONDecodeError:
-                nested = None
-            if isinstance(nested, (dict, list)):
-                self._inspect(
-                    nested,
-                    (*path, "<encoded-json>"),
-                    "encoded-json",
-                    approved_tokens,
-                    approved_values,
-                )
-
-        for decoded in decoded_views:
-            if decoded == stripped:
-                continue
-            for entity in self.detector.detect(decoded):
-                if entity.text not in approved_values:
-                    raise WirePrivacyViolation(
-                        f"encoded {entity.type} at {self._format_path(path)}"
-                    )
 
     @staticmethod
     def _format_path(path: tuple[str | int, ...]) -> str:
@@ -225,7 +283,7 @@ class FinalWirePrivacyGuard:
 
     @staticmethod
     def _is_safe_protocol_number(provider: str, path: tuple[str | int, ...]) -> bool:
-        keys = tuple(part for part in path if isinstance(part, str))
+        keys = path
         common_chat = {
             ("frequency_penalty",),
             ("logprobs",),
@@ -245,6 +303,11 @@ class FinalWirePrivacyGuard:
             ("generationConfig", "topK"),
             ("generationConfig", "topP"),
         }
+        openai_responses = {
+            ("max_output_tokens",),
+            ("temperature",),
+            ("top_p",),
+        }
         if provider in {
             "openai-compatible-chat",
             "openai-chat",
@@ -255,4 +318,6 @@ class FinalWirePrivacyGuard:
             return keys in common_chat
         if provider == "gemini-generate-content":
             return keys in gemini
+        if provider == "openai-responses":
+            return keys in openai_responses
         return False

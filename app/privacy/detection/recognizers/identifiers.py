@@ -15,12 +15,8 @@ from ..canonical import CanonicalText
 from ..validators import is_valid_iban, is_valid_inn, is_valid_snils
 from .base import detection_from_span
 
-_INN = re.compile(
-    r"(?i)(?<!\w)(?:ИНН|tax\s+id)[^\d\r\n]{0,32}(?P<value>\d{10}|\d{12})(?!\d)"
-)
-_SNILS = re.compile(
-    r"(?i)(?<!\d)(?:СНИЛС\s*[:№#]?\s*)?(?P<value>\d{3}-\d{3}-\d{3}\s?\d{2})(?!\d)"
-)
+_INN = re.compile(r"(?i)(?<!\w)(?:ИНН|tax\s+id)[^\d\r\n]{0,32}(?P<value>\d{10}|\d{12})(?!\d)")
+_SNILS = re.compile(r"(?i)(?<!\d)(?:СНИЛС\s*[:№#]?\s*)?(?P<value>\d{3}-\d{3}-\d{3}\s?\d{2})(?!\d)")
 _PASSPORT_CONTEXT = re.compile(
     r"(?i)\bпаспорт\s*[:№#]?\s*(?:серия\s*)?"
     r"(?P<value>\d{4}\s*[,;]?\s*(?:номер|№|#)?\s*\d{6})(?!\d)"
@@ -34,6 +30,7 @@ _IBAN = re.compile(
 class StructuredIdentifierRecognizer:
     name = "structured-identifiers"
     profiles = frozenset(DetectorProfile)
+    capabilities = frozenset({"IBAN", "INN", "PASSPORT", "SNILS"})
 
     def recognize(
         self,

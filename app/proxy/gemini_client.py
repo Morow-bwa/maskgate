@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -8,9 +9,10 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from app.privacy.detection import DetectorEnsemble, LegacyEntityDetectorAdapter
+from app.privacy.detection import DetectorEnsemble
 from app.privacy.models import DetectorProfile
 from app.privacy.wire import FinalWirePrivacyGuard, PrivacyCheckedPayload
+from app.proxy.contracts import TransportCapabilities
 
 from .llm_client import LLMUpstreamError, UpstreamResult, bounded_sse_data, read_bounded_json
 
@@ -21,6 +23,10 @@ class GeminiClient:
     """Native Gemini generateContent adapter behind the OpenAI-compatible proxy."""
 
     accepts_privacy_checked_payload = True
+    capabilities = TransportCapabilities(
+        accepts_checked_payload=True,
+        supports_streaming=True,
+    )
 
     def __init__(
         self,
@@ -36,6 +42,30 @@ class GeminiClient:
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max(max_response_bytes, 1_024)
         self.transport = transport
+        self._client: httpx.AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
+        self._closed = False
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._closed:
+            raise LLMUpstreamError("upstream_unavailable", "The upstream client is closed")
+        if self._client is None:
+            async with self._client_lock:
+                if self._client is None:
+                    self._client = httpx.AsyncClient(
+                        timeout=self.timeout_seconds,
+                        transport=self.transport,
+                        limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
+                        follow_redirects=False,
+                        trust_env=False,
+                    )
+        return self._client
+
+    async def aclose(self) -> None:
+        self._closed = True
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     @staticmethod
     def _normalized_model(value: Any) -> str:
@@ -142,9 +172,7 @@ class GeminiClient:
         if isinstance(payload, PrivacyCheckedPayload):
             return payload
         provider, target, body = self.prepare_request(payload, stream=stream)
-        detector = LegacyEntityDetectorAdapter(
-            DetectorEnsemble(profile=DetectorProfile.STRICT)
-        )
+        detector = DetectorEnsemble(profile=DetectorProfile.STRICT)
         return FinalWirePrivacyGuard(detector).check(
             provider=provider,
             target=target,
@@ -158,9 +186,7 @@ class GeminiClient:
             raise LLMUpstreamError("invalid_model", "The checked Gemini target is invalid")
         return target.split(marker, 1)[1].split(":", 1)[0]
 
-    async def complete(
-        self, payload: PrivacyCheckedPayload | dict[str, Any]
-    ) -> UpstreamResult:
+    async def complete(self, payload: PrivacyCheckedPayload | dict[str, Any]) -> UpstreamResult:
         checked = self._checked(payload, stream=False)
         model = self._model_from_target(checked.target)
         url = f"{self.base_url}{checked.target}"
@@ -169,14 +195,14 @@ class GeminiClient:
             # Header form avoids putting the secret in URLs, access logs, or traces.
             headers["x-goog-api-key"] = self.api_key
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds, transport=self.transport
-            ) as client:
-                async with client.stream(
-                    "POST", url, headers=headers, content=checked.body
-                ) as response:
-                    response_payload = await read_bounded_json(response, self.max_response_bytes)
-                    status_code = response.status_code
+            client = await self._get_client()
+            request = httpx.Request("POST", url, headers=headers, content=checked.body)
+            response = await client.send(request, stream=True, follow_redirects=False)
+            try:
+                response_payload = await read_bounded_json(response, self.max_response_bytes)
+                status_code = response.status_code
+            finally:
+                await response.aclose()
         except LLMUpstreamError:
             raise
         except httpx.TimeoutException as exc:
@@ -203,56 +229,53 @@ class GeminiClient:
             headers["x-goog-api-key"] = self.api_key
         stream_id = f"chatcmpl-gemini-{uuid.uuid4().hex[:16]}"
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout_seconds, transport=self.transport
-            ) as client:
-                async with client.stream(
-                    "POST",
-                    url,
-                    headers=headers,
-                    content=checked.body,
-                ) as response:
-                    if response.is_error:
+            client = await self._get_client()
+            request = httpx.Request("POST", url, headers=headers, content=checked.body)
+            response = await client.send(request, stream=True, follow_redirects=False)
+            try:
+                if response.is_error:
+                    raise LLMUpstreamError(
+                        "upstream_error",
+                        "The upstream Gemini service rejected the streaming request",
+                    )
+                async for data in bounded_sse_data(response, self.max_response_bytes):
+                    try:
+                        chunk = json.loads(data.strip())
+                    except json.JSONDecodeError as exc:
                         raise LLMUpstreamError(
-                            "upstream_error",
-                            "The upstream Gemini service rejected the streaming request",
+                            "upstream_invalid_stream",
+                            "The upstream Gemini service returned malformed SSE JSON",
+                        ) from exc
+                    if not isinstance(chunk, dict):
+                        raise LLMUpstreamError(
+                            "upstream_invalid_stream",
+                            "The upstream Gemini service returned an invalid SSE event",
                         )
-                    async for data in bounded_sse_data(response, self.max_response_bytes):
-                        try:
-                            chunk = json.loads(data.strip())
-                        except json.JSONDecodeError as exc:
-                            raise LLMUpstreamError(
-                                "upstream_invalid_stream",
-                                "The upstream Gemini service returned malformed SSE JSON",
-                            ) from exc
-                        if not isinstance(chunk, dict):
-                            raise LLMUpstreamError(
-                                "upstream_invalid_stream",
-                                "The upstream Gemini service returned an invalid SSE event",
-                            )
-                        candidates = chunk.get("candidates") or []
-                        candidate = candidates[0] if candidates else {}
-                        content = candidate.get("content") or {}
-                        parts = content.get("parts") or []
-                        text = "".join(
-                            part.get("text", "") for part in parts if isinstance(part, dict)
-                        )
-                        finish_reason = candidate.get("finishReason")
-                        yield {
-                            "id": stream_id,
-                            "object": "chat.completion.chunk",
-                            "created": int(time.time()),
-                            "model": model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {"role": "assistant", "content": text},
-                                    "finish_reason": finish_reason.lower()
-                                    if isinstance(finish_reason, str)
-                                    else None,
-                                }
-                            ],
-                        }
+                    candidates = chunk.get("candidates") or []
+                    candidate = candidates[0] if candidates else {}
+                    content = candidate.get("content") or {}
+                    parts = content.get("parts") or []
+                    text = "".join(
+                        part.get("text", "") for part in parts if isinstance(part, dict)
+                    )
+                    finish_reason = candidate.get("finishReason")
+                    yield {
+                        "id": stream_id,
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": text},
+                                "finish_reason": finish_reason.lower()
+                                if isinstance(finish_reason, str)
+                                else None,
+                            }
+                        ],
+                    }
+            finally:
+                await response.aclose()
         except LLMUpstreamError:
             raise
         except httpx.TimeoutException as exc:

@@ -43,9 +43,7 @@ def test_openai_adapter_guard_and_transport_share_exact_bytes(settings) -> None:
         "synthetic-provider-key",
         transport=httpx.MockTransport(provider),
     )
-    client = TestClient(
-        create_app(replace(settings, llm_provider="openai"), llm_client=upstream)
-    )
+    client = TestClient(create_app(replace(settings, llm_provider="openai"), llm_client=upstream))
 
     response = client.post(
         "/v1/chat/completions",
@@ -56,9 +54,7 @@ def test_openai_adapter_guard_and_transport_share_exact_bytes(settings) -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["choices"][0]["message"]["content"] == (
-        "Email owner@example.com"
-    )
+    assert response.json()["choices"][0]["message"]["content"] == ("Email owner@example.com")
     body = seen["body"]
     assert isinstance(body, bytes)
     payload = json.loads(body)
@@ -118,9 +114,7 @@ def test_gemini_adapter_guard_and_transport_share_exact_bytes(settings) -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["choices"][0]["message"]["content"] == (
-        "Email owner@example.com"
-    )
+    assert response.json()["choices"][0]["message"]["content"] == ("Email owner@example.com")
     body = seen["body"]
     assert isinstance(body, bytes)
     payload = json.loads(body)
@@ -133,9 +127,7 @@ def test_gemini_adapter_guard_and_transport_share_exact_bytes(settings) -> None:
         separators=(",", ":"),
     ).encode("utf-8")
     assert b"owner@example.com" not in body
-    assert str(seen["url"]).endswith(
-        "/v1beta/models/gemini-2.5-flash:generateContent"
-    )
+    assert str(seen["url"]).endswith("/v1beta/models/gemini-2.5-flash:generateContent")
 
 
 def test_malformed_success_response_fails_closed(settings) -> None:
@@ -147,9 +139,7 @@ def test_malformed_success_response_fails_closed(settings) -> None:
         "synthetic-provider-key",
         transport=httpx.MockTransport(provider),
     )
-    client = TestClient(
-        create_app(replace(settings, llm_provider="openai"), llm_client=upstream)
-    )
+    client = TestClient(create_app(replace(settings, llm_provider="openai"), llm_client=upstream))
 
     response = client.post(
         "/v1/chat/completions",
@@ -177,9 +167,7 @@ def test_malformed_stream_event_becomes_safe_error_event(settings) -> None:
         "synthetic-provider-key",
         transport=httpx.MockTransport(provider),
     )
-    client = TestClient(
-        create_app(replace(settings, llm_provider="openai"), llm_client=upstream)
-    )
+    client = TestClient(create_app(replace(settings, llm_provider="openai"), llm_client=upstream))
 
     response = client.post(
         "/v1/chat/completions",

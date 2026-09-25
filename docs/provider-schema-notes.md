@@ -51,6 +51,19 @@ Responses storage is not accepted implicitly. The Adapter emits `store: false` b
 web search, file search, remote MCP, computer use and similar tools are remote tools and are blocked
 without reviewed policy.
 
+Runtime status: supported for non-stream `POST /v1/responses`. The route parses provider-native
+input into Canonical Privacy IR, applies the privacy runtime across instructions, messages, schema
+descriptions/keys/enums, function arguments, and function outputs, serializes provider-native JSON,
+and sends only immutable bytes sealed by `FinalWirePrivacyGuard` to `/responses`. The supported
+public subset is stateless: `store` is always `false`, `previous_response_id` is rejected, and
+built-in/remote tools are rejected. Function tools and JSON Schema structured output are supported.
+
+Successful provider responses are validated against an explicit official-document-shaped root
+allowlist. Message output text/refusals and function calls are typed and unknown fields fail closed.
+Provider metadata is validated and discarded; the client receives only `id`, `object`, `status`,
+and the typed `output` array. Provider error bodies are never forwarded. Streaming is explicitly
+rejected with `unsupported_feature` and is not advertised as runtime-supported.
+
 Official references:
 
 - [Migrate to the Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses)
@@ -64,6 +77,8 @@ message blocks are `text`, `tool_use`, and `tool_result`. Function definitions, 
 tool choice, `output_config.format` JSON Schema output, and text/tool-input stream deltas are
 preserved. Image, document, citation, cache-control and thinking blocks fail closed in this initial
 subset.
+
+Runtime status: library-only Adapter; no public Anthropic Messages transport route is registered.
 
 Official references:
 
@@ -97,6 +112,9 @@ Gemini Interactions is the current recommended Gemini interface, but its schema 
 Supported request subset: text `input`/`user_input`/`model_output`, `system_instruction`, custom
 function tools, `function_call`, `function_result`, JSON `response_format`, common
 `generation_config`, and typed text/tool-argument/finish/error stream events.
+
+Runtime status: experimental library-only Adapter; no public Interactions transport route is
+registered.
 
 Gemini stores Interactions by default upstream. MaskGate instead emits `store: false` by default.
 `previous_interaction_id` is rejected unless both provider storage and the exact opaque field have

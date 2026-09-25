@@ -3,7 +3,8 @@ import asyncio
 import httpx
 import pytest
 
-from app.masking.detector import RegexDetector
+from app.privacy.detection import DetectorEnsemble
+from app.privacy.models import DetectorProfile
 from app.privacy.wire import FinalWirePrivacyGuard
 from app.proxy.gemini_client import GeminiClient
 from app.proxy.llm_client import LLMUpstreamError
@@ -99,7 +100,7 @@ def test_gemini_transport_sends_only_post_adapter_checked_bytes() -> None:
             "messages": [{"role": "user", "content": f"Email {token}"}],
         }
     )
-    checked = FinalWirePrivacyGuard(RegexDetector()).check(
+    checked = FinalWirePrivacyGuard(DetectorEnsemble(profile=DetectorProfile.STRICT)).check(
         provider=provider,
         target=target,
         payload=body,
@@ -156,3 +157,47 @@ def test_gemini_model_cannot_escape_the_models_path() -> None:
                 }
             )
         )
+
+
+def test_gemini_client_reuses_pool_without_cookies_or_redirects() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]},
+                headers={"set-cookie": "provider_state=forbidden; Path=/"},
+                request=request,
+            )
+        return httpx.Response(
+            307,
+            json={"redirect": "not-followed"},
+            headers={"location": "https://other.invalid/collect"},
+            request=request,
+        )
+
+    client = GeminiClient(
+        "https://provider.invalid/v1",
+        "local-test-secret",
+        transport=httpx.MockTransport(handler),
+    )
+    payload = {
+        "model": "gemini-2.5-flash",
+        "messages": [{"role": "user", "content": "Hi"}],
+    }
+
+    async def exercise() -> tuple[int, int, bool]:
+        first = await client.complete(payload)
+        pool_id = id(client._client)
+        second = await client.complete(payload)
+        reused = pool_id == id(client._client)
+        await client.aclose()
+        return first.status_code, second.status_code, reused
+
+    assert asyncio.run(exercise()) == (200, 307, True)
+    assert len(requests) == 2
+    assert all("cookie" not in request.headers for request in requests)
+    assert requests[1].url.host == "provider.invalid"
+    assert client._closed is True

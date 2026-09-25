@@ -1,13 +1,18 @@
+import pytest
+
 from app.masking.anonymizer import MappingItem
-from app.storage.mapping_store import InMemoryMappingStore
+from app.storage.mapping_store import InMemoryMappingStore, RequestMappingRevoked
 
 
 def test_mapping_cleanup_after_delete() -> None:
     store = InMemoryMappingStore(ttl_seconds=60)
-    store.put("req_1", [MappingItem("EMAIL", "a@example.com", "<EMAIL_1>")])
+    mapping = store.put("req_1", [MappingItem("EMAIL", "a@example.com", "<EMAIL_1>")])
     assert store.size() == 1
+    store.require_active(mapping)
     store.delete("req_1")
     assert store.size() == 0
+    with pytest.raises(RequestMappingRevoked):
+        store.require_active(mapping)
 
 
 def test_mapping_ttl_expires() -> None:

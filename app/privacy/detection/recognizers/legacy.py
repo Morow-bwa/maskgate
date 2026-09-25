@@ -12,7 +12,7 @@ from app.privacy.models import (
 )
 
 from ..canonical import CanonicalText
-from ..validators import is_valid_inn, is_valid_luhn
+from ..validators import is_plausible_phone, is_valid_inn, is_valid_luhn
 from .base import detection_from_span
 
 _ALL_PROFILES = frozenset(DetectorProfile)
@@ -48,6 +48,36 @@ def _touches_identifier(text: str, start: int, end: int) -> bool:
     )
 
 
+def _looks_like_encoded_triplet(value: str) -> bool:
+    labels = value.casefold().split(".")
+    return (
+        len(labels) == 3
+        and all(label.isascii() and label.isalpha() for label in labels)
+        and all(len(label) >= 8 for label in labels)
+    )
+
+
+def _has_explicit_non_person_context(text: str, start: int, end: int) -> bool:
+    value = text[start:end].casefold()
+    tail = text[end : min(len(text), end + 80)].casefold()
+    if value.startswith(("фраза ", "название ", "назва ")):
+        return True
+    return any(
+        marker in tail
+        for marker in (
+            "заголовком документа",
+            "заголовком документу",
+            "названием проекта",
+            "назвою проєкту",
+        )
+    )
+
+
+def _starts_inside_iban_shape(text: str, start: int) -> bool:
+    prefix = text[max(0, start - 40) : start]
+    return bool(re.search(r"(?i)(?:\bIBAN\s+)?[A-Z]{2}\d{2}\s+[A-Z]{4}\s+$", prefix))
+
+
 class LegacyRegexAdapter:
     """Adapter that preserves useful legacy patterns behind the Recognizer Seam."""
 
@@ -56,6 +86,7 @@ class LegacyRegexAdapter:
 
     def __init__(self, patterns: tuple[PatternSpec, ...] = PATTERNS) -> None:
         self._patterns = patterns
+        self.capabilities = frozenset(spec.entity_type.value for spec in patterns)
 
     def recognize(
         self,
@@ -88,17 +119,28 @@ class LegacyRegexAdapter:
         validation = ValidationState.UNVALIDATED
         confidence = 0.82
         value = text.text[start:end]
+        if entity_type == "PERSON" and _has_explicit_non_person_context(text.text, start, end):
+            return None
+        if entity_type == "DOMAIN" and _looks_like_encoded_triplet(value):
+            return None
         if entity_type in _VALID_BY_PATTERN:
             validation = ValidationState.VALID
             confidence = 0.97
         elif entity_type == "CARD_NUMBER":
-            if _touches_identifier(text.text, start, end):
+            if _touches_identifier(text.text, start, end) or _starts_inside_iban_shape(
+                text.text, start
+            ):
                 return None
             validation = ValidationState.VALID if is_valid_luhn(value) else ValidationState.INVALID
             confidence = 0.99 if validation is ValidationState.VALID else 0.52
         elif entity_type == "INN":
             validation = ValidationState.VALID if is_valid_inn(value) else ValidationState.INVALID
             confidence = 0.99 if validation is ValidationState.VALID else 0.58
+        elif entity_type == "PHONE":
+            if not is_plausible_phone(value, context_before=text.text[max(0, start - 24) : start]):
+                return None
+            validation = ValidationState.VALID
+            confidence = 0.94
 
         if validation is ValidationState.INVALID and context.profile is not DetectorProfile.STRICT:
             return None

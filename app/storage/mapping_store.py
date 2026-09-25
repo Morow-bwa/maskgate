@@ -16,6 +16,10 @@ class RequestMapping:
     items: tuple[MappingItem, ...]
 
 
+class RequestMappingRevoked(RuntimeError):
+    """The request-scoped restoration permit is no longer active."""
+
+
 class InMemoryMappingStore:
     """Request-scoped mapping store; never writes mapping data to disk or logs."""
 
@@ -48,6 +52,13 @@ class InMemoryMappingStore:
         with self._lock:
             self._cleanup_locked(now)
             return self._items.get(request_id)
+
+    def require_active(self, mapping: RequestMapping) -> None:
+        now = self._clock()
+        with self._lock:
+            self._cleanup_locked(now)
+            if self._items.get(mapping.request_id) is not mapping:
+                raise RequestMappingRevoked
 
     def delete(self, request_id: str) -> None:
         with self._lock:

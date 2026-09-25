@@ -23,22 +23,28 @@ client <- authorized restore <- output privacy guard <----------+
 ## Implemented
 
 - OpenAI-compatible `POST /v1/chat/completions`, including strict buffered streaming.
+- OpenAI Responses `POST /v1/responses` non-stream runtime with stateless `store: false`, local
+  function tools, strict typed output validation, and safe response projection.
 - Runtime provider paths for OpenAI-compatible Chat and Gemini `generateContent`.
-- Canonical Privacy IR plus tested library Adapters for OpenAI Responses, Anthropic Messages, and
-  experimental Gemini Interactions.
+- Canonical Privacy IR plus tested library Adapters for Anthropic Messages and experimental Gemini
+  Interactions; these two adapters are not public runtime routes yet.
 - Bounded Unicode canonicalization, pluggable recognizers, checksum validators, strict detector
   profiles, deterministic privacy risk, and contextual Policy v2.
+- Local deterministic compound quasi-identifier findings plus policy-gated age/date generalization
+  candidates; this API is advisory and does not claim semantic anonymity.
 - Random opaque tokens, bijective bounded RAM vault, conversation mapping pruning, and
-  credential-derived principal isolation.
+  credential-derived principal isolation. Revocable generation/revision leases prevent stale
+  commits and deletion invalidates restoration authority.
 - Recursive transformation of messages, object keys, metadata, tool definitions/arguments/results,
   and structured text fields.
 - Final post-Adapter wire guard; built-in transports send the exact checked bytes.
 - Output inspection before restoration, new-PII redaction, safe structured conversation history,
   and malformed response/stream rejection.
 - Local DOCX, PDF, PNG, JPEG, WebP, TIFF, and BMP anonymization with fail-closed format/resource
-  checks.
+  checks, trusted tenant/purpose policy context, and strict pre-parser in-memory multipart storage.
 - Bearer auth, rate/body/response limits, trusted hosts, safe logs/metrics, production hardening,
-  dependency/secret scans, CodeQL, and container CI.
+  aggregate/per-principal admission, total deadlines, reusable provider pools, dependency/secret
+  scans, CodeQL, and container CI.
 
 See [Privacy guarantees](docs/PRIVACY_GUARANTEES.md) for the exact boundary and limitations.
 
@@ -88,7 +94,9 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 Set `POLICY_V2_FILE` to a strict contextual YAML policy. A public contact or famous name requires an
 exact hashed assertion scoped to tenant, application, provider, direction, and purpose, with expiry
-and provenance. It is not globally allowlisted. See [Policy](POLICY.md) and the
+and provenance. The resulting in-memory approval is also bound to the exact source/wire path and
+policy revision. Legacy `obligations` are informational annotations; unsupported
+`mandatory_obligations` reject policy loading. See [Policy](POLICY.md) and the
 [example schema](docs/policy-schema-v2.example.yaml).
 
 ## File anonymization
@@ -102,7 +110,9 @@ curl -F "file=@document.pdf" \
 ```
 
 OCR and face detection can miss content. Review sanitized files before high-risk use. Secure PDF
-mode rasterizes pages and loses search, links, forms, and accessibility structure.
+mode rasterizes pages and loses search, links, forms, and accessibility structure. Strict media
+mode keeps every accepted multipart upload in bounded RAM before FastAPI parsing; native OCR work
+cannot be force-killed by coroutine cancellation and remains bounded by media worker concurrency.
 
 ## Production
 
@@ -120,13 +130,21 @@ process-local RAM. See [Deployment](docs/DEPLOYMENT.md), [Threat model](docs/THR
 
 ## Verification
 
+The [project harness](docs/agent/README.md) provides a module/test map, environment diagnosis and
+the same core checks used by CI. On Windows, including a broken venv launcher in Codex:
+
 ```powershell
-python -m ruff check app evaluation scripts
-python -m pytest app/tests --cov=app --cov-branch --cov-report=term-missing
-python -m evaluation.evaluate_detection --profile strict
+.\scripts\check.ps1 -Command doctor
+.\scripts\check.ps1 -Quick
+.\scripts\check.ps1 -Frontend
+```
+
+With a prepared Python environment on any platform, run `python scripts/harness.py check`.
+Additional release checks:
+
+```powershell
 python -m pip_audit --local
 python scripts/check_secrets.py --history
-pnpm --dir playground-react build
 pnpm --dir playground-react audit --audit-level high
 ```
 

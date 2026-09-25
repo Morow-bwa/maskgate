@@ -43,8 +43,21 @@ _KNOWN_ENTITY_TYPES = frozenset(item.value for item in EntityType) | frozenset(
 )
 _PUBLIC_ASSERTION_ENTITY_TYPES = frozenset({"DOMAIN", "EMAIL", "LOCATION", "ORG", "PERSON", "URL"})
 _ROOT_KEYS = frozenset({"version", "defaults", "rules", "public_data_assertions"})
-_DEFAULT_KEYS = frozenset({"action", "reason", "obligations"})
-_RULE_KEYS = frozenset({"id", "priority", "action", "reason", "obligations", "conditions"})
+_DEFAULT_KEYS = frozenset(
+    {"action", "reason", "obligations", "annotations", "mandatory_obligations"}
+)
+_RULE_KEYS = frozenset(
+    {
+        "id",
+        "priority",
+        "action",
+        "reason",
+        "obligations",
+        "annotations",
+        "mandatory_obligations",
+        "conditions",
+    }
+)
 _CONDITION_KEYS = frozenset(
     {
         "entity_types",
@@ -76,6 +89,8 @@ _ASSERTION_KEYS = frozenset(
         "action",
         "reason",
         "obligations",
+        "annotations",
+        "mandatory_obligations",
         "scope",
         "expires_at",
         "provenance",
@@ -156,6 +171,29 @@ def _string_list(
     if len(set(normalized)) != len(normalized):
         raise PolicySchemaError(f"{where} contains duplicate values")
     return normalized
+
+
+def _obligation_fields(
+    mapping: Mapping[str, Any],
+    where: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if "obligations" in mapping and "annotations" in mapping:
+        raise PolicySchemaError(
+            f"{where} cannot contain both legacy obligations and annotations"
+        )
+    annotations = _string_list(
+        mapping.get("annotations", mapping.get("obligations")),
+        f"{where}.annotations",
+    )
+    mandatory = _string_list(
+        mapping.get("mandatory_obligations"),
+        f"{where}.mandatory_obligations",
+    )
+    if mandatory:
+        raise PolicySchemaError(
+            f"{where} contains unsupported mandatory obligation: {mandatory[0]}"
+        )
+    return annotations, mandatory
 
 
 def _enum_value(enum_type: type[_T], value: object, where: str) -> _T:
@@ -272,14 +310,15 @@ def _parse_rule(raw: object, index: int) -> PolicyRule:
     if priority is None:
         raise PolicySchemaError(f"{where}.priority is required")
     reason = _required_string(mapping, "reason", where)
-    obligations = _string_list(mapping.get("obligations"), f"{where}.obligations")
+    annotations, mandatory_obligations = _obligation_fields(mapping, where)
     conditions = _parse_conditions(mapping.get("conditions"), f"{where}.conditions")
     return PolicyRule(
         rule_id=rule_id,
         priority=int(priority),
         action=_enum_value(PrivacyAction, mapping.get("action"), f"{where}.action"),
         reason=reason,
-        obligations=obligations,
+        annotations=annotations,
+        mandatory_obligations=mandatory_obligations,
         conditions=conditions,
     )
 
@@ -339,13 +378,15 @@ def _parse_assertion(raw: object, index: int) -> PublicDataAssertion:
             _string_list(scope_mapping.get("jurisdictions"), f"{scope_where}.jurisdictions")
         ),
     )
+    annotations, mandatory_obligations = _obligation_fields(mapping, where)
     return PublicDataAssertion(
         assertion_id=_required_string(mapping, "id", where),
         entity_type=entity_type,
         value_sha256=value_sha256,
         action=action,
         reason=_required_string(mapping, "reason", where),
-        obligations=_string_list(mapping.get("obligations"), f"{where}.obligations"),
+        annotations=annotations,
+        mandatory_obligations=mandatory_obligations,
         scope=scope,
         expires_at=_parse_datetime(mapping.get("expires_at"), f"{where}.expires_at"),
         provenance=_required_string(mapping, "provenance", where),
@@ -409,11 +450,16 @@ def load_policy_v2(path: Path) -> PolicyDocumentV2:
         ),
         "public assertion target and scope",
     )
+    default_annotations, default_mandatory_obligations = _obligation_fields(
+        defaults,
+        "defaults",
+    )
     return PolicyDocumentV2(
         version="2",
         default_action=default_action,
         default_reason=_required_string(defaults, "reason", "defaults"),
-        default_obligations=_string_list(defaults.get("obligations"), "defaults.obligations"),
+        default_annotations=default_annotations,
+        default_mandatory_obligations=default_mandatory_obligations,
         rules=tuple(sorted(rules, key=lambda rule: rule.priority, reverse=True)),
         public_data_assertions=assertions,
     )

@@ -22,7 +22,7 @@ all provider responses are untrusted.
 4. Adapter -> remote provider: exact body passes `FinalWirePrivacyGuard`, becomes a sealed payload,
    and is sent unchanged.
 5. Provider -> output guard: bounded JSON/SSE, response/event validation, PII inspection, authorized
-   restoration.
+   restoration, decoded-view checks, and non-reflective public errors.
 6. Upload -> media pipeline: hostile archives/documents/images enter bounded parsers and local
    verification.
 7. Process memory -> host: originals exist temporarily in request buffers and the RAM vault.
@@ -51,6 +51,8 @@ all provider responses are untrusted.
   block/review rules.
 - Built-in transports cannot accept arbitrary dictionaries from the application path. Direct
   library dictionary calls still run a local strict final guard.
+- The same detector contract and capability manifest protect ingress, final wire, and output.
+  Application composition fails at startup if a terminal detector is weaker than ingress.
 - Provider-safe history retains tool calls/results with opaque tokens; rehydrated originals are
   returned to the client only.
 - Media is never attached to a provider request automatically. Unsupported or unverifiable formats
@@ -75,5 +77,8 @@ all provider responses are untrusted.
 - Reversible replacements are collision-free and token injection cannot authorize restoration.
 - Same conversation ID under two credentials creates isolated state.
 - Trim/expiry/delete remove mappings no longer referenced by retained provider-safe history.
+- A retained conversation never exceeds its configured character budget, including a single
+  oversized message.
 - Red-team attempts raw provider leakage, incorrect rehydration, cross-principal access, streaming/
-  tool bypass, stale retention, logging leakage, and hostile files before release.
+  tool bypass, encoded provider output, exception reflection, stale retention, logging leakage, and
+  hostile files before release.

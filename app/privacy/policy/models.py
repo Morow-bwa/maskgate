@@ -64,9 +64,16 @@ class PolicyDecision:
     action: PrivacyAction
     reason: str
     policy_version: str
-    obligations: tuple[str, ...]
+    annotations: tuple[str, ...]
+    mandatory_obligations: tuple[str, ...] = ()
     rule_id: str | None = None
     assertion_id: str | None = None
+    expires_at: datetime | None = None
+
+    @property
+    def obligations(self) -> tuple[str, ...]:
+        """Legacy alias for informational annotations, never proof of execution."""
+        return self.annotations
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +105,8 @@ class PolicyRule:
     priority: int
     action: PrivacyAction
     reason: str
-    obligations: tuple[str, ...]
+    annotations: tuple[str, ...]
+    mandatory_obligations: tuple[str, ...]
     conditions: RuleConditions
 
 
@@ -121,7 +129,8 @@ class PublicDataAssertion:
     value_sha256: str
     action: PrivacyAction
     reason: str
-    obligations: tuple[str, ...]
+    annotations: tuple[str, ...]
+    mandatory_obligations: tuple[str, ...]
     scope: PublicAssertionScope
     expires_at: datetime
     provenance: str
@@ -132,9 +141,15 @@ class PolicyDocumentV2:
     version: str
     default_action: PrivacyAction
     default_reason: str
-    default_obligations: tuple[str, ...]
+    default_annotations: tuple[str, ...]
+    default_mandatory_obligations: tuple[str, ...]
     rules: tuple[PolicyRule, ...]
     public_data_assertions: tuple[PublicDataAssertion, ...]
+
+    @property
+    def default_obligations(self) -> tuple[str, ...]:
+        """Legacy alias for informational annotations."""
+        return self.default_annotations
 
 
 class PolicySchemaError(ValueError):

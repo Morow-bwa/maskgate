@@ -97,6 +97,10 @@ class PolicyEngineV2:
         self._policy = policy
         self._now = now or (lambda: datetime.now(timezone.utc))
 
+    @property
+    def version(self) -> str:
+        return self._policy.version
+
     def _public_assertion(
         self,
         detection: PrivacyDetection,
@@ -151,7 +155,8 @@ class PolicyEngineV2:
                 action=rule.action,
                 reason=rule.reason,
                 policy_version=self._policy.version,
-                obligations=rule.obligations,
+                annotations=rule.annotations,
+                mandatory_obligations=rule.mandatory_obligations,
                 rule_id=rule.rule_id,
             )
         if value is not None:
@@ -161,8 +166,10 @@ class PolicyEngineV2:
                     action=assertion.action,
                     reason=assertion.reason,
                     policy_version=self._policy.version,
-                    obligations=assertion.obligations,
+                    annotations=assertion.annotations,
+                    mandatory_obligations=assertion.mandatory_obligations,
                     assertion_id=assertion.assertion_id,
+                    expires_at=assertion.expires_at,
                 )
 
         if rule is not None:
@@ -170,12 +177,14 @@ class PolicyEngineV2:
                 action=rule.action,
                 reason=rule.reason,
                 policy_version=self._policy.version,
-                obligations=rule.obligations,
+                annotations=rule.annotations,
+                mandatory_obligations=rule.mandatory_obligations,
                 rule_id=rule.rule_id,
             )
         return PolicyDecision(
             action=self._policy.default_action,
             reason=self._policy.default_reason,
             policy_version=self._policy.version,
-            obligations=self._policy.default_obligations,
+            annotations=self._policy.default_annotations,
+            mandatory_obligations=self._policy.default_mandatory_obligations,
         )

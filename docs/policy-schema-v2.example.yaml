@@ -1,15 +1,18 @@
 # MaskGate Policy Module v2 example.
 #
 # Precedence is deterministic:
-#   1. an active, exact, fully scoped public-data assertion;
-#   2. the matching rule with the highest unique numeric priority;
-#   3. the fail-closed default.
+#   1. the highest-priority matching BLOCK or REQUIRE_REVIEW rule;
+#   2. an active, exact, fully scoped public-data assertion;
+#   3. the highest-priority remaining matching rule;
+#   4. the fail-closed default.
+# Legacy `obligations` are accepted as informational annotations. Use `annotations`
+# explicitly in new policy files. Unsupported `mandatory_obligations` reject loading.
 version: 2
 
 defaults:
   action: BLOCK
   reason: no_explicit_policy_match
-  obligations:
+  annotations:
     - audit_decision
 
 rules:
@@ -17,7 +20,7 @@ rules:
     priority: 1000
     action: BLOCK
     reason: credentials_must_not_leave_the_trust_boundary
-    obligations:
+    annotations:
       - audit_decision
       - alert_security_owner
     conditions:
@@ -30,7 +33,7 @@ rules:
     priority: 500
     action: TOKENIZE
     reason: approved_customer_support_flow
-    obligations:
+    annotations:
       - audit_decision
       - vault_request_scope
     conditions:
@@ -78,7 +81,7 @@ public_data_assertions:
     value_sha256: d7542c949ec1f3e395ee5344822b90f76a97f0af52c4a8b43530d829ac47f2c5
     action: ALLOW
     reason: published_press_contact
-    obligations:
+    annotations:
       - audit_public_assertion
     scope:
       tenants:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.privacy.ir import (
@@ -40,6 +41,9 @@ from .base import (
     remote_tool,
 )
 from .common import classification_for_role, generation_settings, parse_simple_tool_choice
+
+_RESPONSE_ID_PATTERN = re.compile(r"^(?:resp|msg|fc|call)_[A-Za-z0-9_-]{1,120}$")
+_FUNCTION_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
 
 
 class OpenAIResponsesAdapter:
@@ -255,7 +259,11 @@ class OpenAIResponsesAdapter:
                 {
                     "type": "function_call_output",
                     "call_id": result.call_id,
-                    "output": compact_json(result.result),
+                    "output": (
+                        result.result
+                        if isinstance(result.result, str)
+                        else compact_json(result.result)
+                    ),
                 }
             ]
         items: list[dict[str, Any]] = []
@@ -410,3 +418,208 @@ class OpenAIResponsesAdapter:
         }:
             return ()
         raise ProviderAdapterError(self.name, "$event.type", "unknown stream event")
+
+
+def validate_openai_response(payload: Any) -> dict[str, Any]:
+    """Validate a real Responses object and select the safe public subset."""
+
+    provider = OpenAIResponsesAdapter.name
+    response = expect_object(payload, provider, "$response")
+    allowed = {
+        "id",
+        "object",
+        "created_at",
+        "status",
+        "completed_at",
+        "error",
+        "incomplete_details",
+        "instructions",
+        "max_output_tokens",
+        "model",
+        "output",
+        "parallel_tool_calls",
+        "previous_response_id",
+        "reasoning",
+        "store",
+        "temperature",
+        "text",
+        "tool_choice",
+        "tools",
+        "top_p",
+        "truncation",
+        "usage",
+        "user",
+        "metadata",
+        "background",
+        "service_tier",
+    }
+    if set(response) - allowed:
+        raise ProviderAdapterError(provider, "$response", "unknown response field")
+    identifier = _expect_protocol_id(response.get("id"), provider, "$response.id")
+    if response.get("object") != "response":
+        raise ProviderAdapterError(provider, "$response.object", "expected response")
+    status = expect_string(response.get("status"), provider, "$response.status")
+    if status not in {"completed", "incomplete"}:
+        raise ProviderAdapterError(provider, "$response.status", "unsupported response status")
+    output = expect_list(response.get("output"), provider, "$response.output")
+    for index, raw_item in enumerate(output):
+        path = f"$response.output[{index}]"
+        item = expect_object(raw_item, provider, path)
+        item_type = expect_string(item.get("type"), provider, f"{path}.type")
+        if item_type == "message":
+            _validate_response_message(item, path)
+        elif item_type == "function_call":
+            _validate_response_function_call(item, path)
+        else:
+            raise ProviderAdapterError(provider, f"{path}.type", "unsupported output item")
+    _validate_response_metadata(response)
+    return {"id": identifier, "object": "response", "status": status, "output": output}
+
+
+def _validate_response_metadata(response: dict[str, Any]) -> None:
+    provider = OpenAIResponsesAdapter.name
+
+    for name in ("created_at", "completed_at", "max_output_tokens"):
+        value = response.get(name)
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+            raise ProviderAdapterError(provider, f"$response.{name}", "expected an integer")
+    for name in ("temperature", "top_p"):
+        value = response.get(name)
+        if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+            raise ProviderAdapterError(provider, f"$response.{name}", "expected a number")
+    for name in ("parallel_tool_calls", "store", "background"):
+        if name in response and not isinstance(response[name], bool):
+            raise ProviderAdapterError(provider, f"$response.{name}", "expected a boolean")
+    if response.get("store") is not None and response["store"] is not False:
+        raise ProviderAdapterError(provider, "$response.store", "provider storage was enabled")
+    if response.get("error") is not None:
+        raise ProviderAdapterError(provider, "$response.error", "provider reported an error")
+    previous = response.get("previous_response_id")
+    if previous is not None:
+        raise ProviderAdapterError(
+            provider,
+            "$response.previous_response_id",
+            "stateful response chaining is unsupported",
+        )
+    model = response.get("model")
+    if model is not None:
+        model = expect_string(model, provider, "$response.model")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model):
+            raise ProviderAdapterError(provider, "$response.model", "invalid model identifier")
+    truncation = response.get("truncation")
+    if truncation is not None and truncation not in {"auto", "disabled"}:
+        raise ProviderAdapterError(provider, "$response.truncation", "unsupported truncation")
+    service_tier = response.get("service_tier")
+    if service_tier is not None:
+        expect_string(service_tier, provider, "$response.service_tier")
+    user = response.get("user")
+    if user is not None:
+        expect_string(user, provider, "$response.user")
+    instructions = response.get("instructions")
+    if instructions is not None and not isinstance(instructions, (str, list)):
+        raise ProviderAdapterError(
+            provider, "$response.instructions", "expected text, array, or null"
+        )
+    for name in ("incomplete_details", "reasoning", "text", "metadata"):
+        value = response.get(name)
+        if value is not None:
+            expect_object(value, provider, f"$response.{name}")
+    if "tool_choice" in response and not isinstance(response["tool_choice"], (str, dict)):
+        raise ProviderAdapterError(provider, "$response.tool_choice", "expected text or object")
+    for name in ("tools",):
+        if name in response:
+            expect_list(response[name], provider, f"$response.{name}")
+    usage = response.get("usage")
+    if usage is not None:
+        _validate_usage(expect_object(usage, provider, "$response.usage"))
+
+
+def _validate_usage(usage: dict[str, Any]) -> None:
+    provider = OpenAIResponsesAdapter.name
+    allowed = {
+        "input_tokens",
+        "input_tokens_details",
+        "output_tokens",
+        "output_tokens_details",
+        "total_tokens",
+    }
+    if set(usage) - allowed:
+        raise ProviderAdapterError(provider, "$response.usage", "unknown usage field")
+    for name, value in usage.items():
+        if name.endswith("_details"):
+            expect_object(value, provider, f"$response.usage.{name}")
+        elif not isinstance(value, int) or isinstance(value, bool):
+            raise ProviderAdapterError(provider, f"$response.usage.{name}", "expected an integer")
+
+
+def _validate_response_message(item: dict[str, Any], path: str) -> None:
+    provider = OpenAIResponsesAdapter.name
+    allowed = {"id", "type", "status", "role", "content"}
+    if set(item) - allowed:
+        raise ProviderAdapterError(provider, path, "unknown output message field")
+    _expect_protocol_id(item.get("id"), provider, f"{path}.id")
+    if item.get("role") != "assistant":
+        raise ProviderAdapterError(provider, f"{path}.role", "expected assistant")
+    if item.get("status") not in {"completed", "incomplete", "in_progress"}:
+        raise ProviderAdapterError(provider, f"{path}.status", "unsupported item status")
+    for block_index, raw_block in enumerate(
+        expect_list(item.get("content"), provider, f"{path}.content")
+    ):
+        block_path = f"{path}.content[{block_index}]"
+        block = expect_object(raw_block, provider, block_path)
+        block_type = expect_string(block.get("type"), provider, f"{block_path}.type")
+        if block_type == "output_text":
+            if set(block) - {"type", "text", "annotations", "logprobs"}:
+                raise ProviderAdapterError(provider, block_path, "unknown output text field")
+            expect_string(block.get("text"), provider, f"{block_path}.text")
+            annotations = expect_list(
+                block.get("annotations", []), provider, f"{block_path}.annotations"
+            )
+            if annotations:
+                raise ProviderAdapterError(
+                    provider, f"{block_path}.annotations", "annotations are unsupported"
+                )
+            if "logprobs" in block:
+                logprobs = expect_list(block["logprobs"], provider, f"{block_path}.logprobs")
+                if logprobs:
+                    raise ProviderAdapterError(
+                        provider, f"{block_path}.logprobs", "logprobs are unsupported"
+                    )
+        elif block_type == "refusal":
+            if set(block) != {"type", "refusal"}:
+                raise ProviderAdapterError(provider, block_path, "unknown refusal field")
+            expect_string(block.get("refusal"), provider, f"{block_path}.refusal")
+        else:
+            raise ProviderAdapterError(provider, f"{block_path}.type", "unsupported content block")
+
+
+def _validate_response_function_call(item: dict[str, Any], path: str) -> None:
+    provider = OpenAIResponsesAdapter.name
+    allowed = {"id", "type", "status", "call_id", "name", "arguments"}
+    if set(item) - allowed:
+        raise ProviderAdapterError(provider, path, "unknown function call field")
+    for name in ("id", "call_id", "name"):
+        value = item.get(name)
+        if name == "name":
+            _expect_function_name(value, provider, f"{path}.{name}")
+        else:
+            _expect_protocol_id(value, provider, f"{path}.{name}")
+    if item.get("status") not in {"completed", "incomplete", "in_progress"}:
+        raise ProviderAdapterError(provider, f"{path}.status", "unsupported item status")
+    arguments = read_json_text(item.get("arguments"), provider, f"{path}.arguments")
+    if not isinstance(arguments, dict):
+        raise ProviderAdapterError(provider, f"{path}.arguments", "expected object JSON")
+
+
+def _expect_protocol_id(value: Any, provider: str, path: str) -> str:
+    identifier = expect_string(value, provider, path)
+    if not _RESPONSE_ID_PATTERN.fullmatch(identifier):
+        raise ProviderAdapterError(provider, path, "invalid protocol identifier")
+    return identifier
+
+
+def _expect_function_name(value: Any, provider: str, path: str) -> str:
+    name = expect_string(value, provider, path)
+    if not _FUNCTION_NAME_PATTERN.fullmatch(name):
+        raise ProviderAdapterError(provider, path, "invalid function name")
+    return name

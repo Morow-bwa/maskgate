@@ -14,3 +14,12 @@ Strict streaming deliberately buffers supported output fields until complete, so
 token is approximately provider completion time rather than first upstream token time. OCR/PDF/media
 latency depends on file size, page count, resolution, and local optional dependencies and should be
 measured with deployment-specific non-sensitive fixtures.
+
+## Bounded local resource sample
+
+`python scripts/measure_resources.py` exercises only the local mock Chat path. On the September 12,
+2026 Windows 11 development machine (16 GB RAM), one run used 12 requests at concurrency 4 with a
+64 KiB message per request. It completed in 2.858 seconds; process working set rose from 68,784,128
+to 81,596,416 bytes, a sampled delta of 12,812,288 bytes. Admission finished with zero active
+operations and zero reserved bytes. This is a bounded regression sample, not an RPS target,
+multi-worker measurement or proof against OOM under different payloads.

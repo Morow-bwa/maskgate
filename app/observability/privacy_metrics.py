@@ -14,13 +14,18 @@ class PrivacyMetric(StrEnum):
     POLICY_REVIEWS = "policy_reviews_total"
     PROVIDER_TRANSFORM_FAILURES = "provider_transform_failures_total"
     WIRE_REJECTIONS = "wire_rejections_total"
-    OUTPUT_REDACTIONS = "output_redactions_total"
+    OUTPUT_FAILURES = "output_failures_total"
     VAULT_INSERTS = "vault_inserts_total"
     VAULT_DELETIONS = "vault_deletions_total"
     VAULT_CAPACITY_REJECTIONS = "vault_capacity_rejections_total"
+    ADMISSION_REJECTIONS = "admission_rejections_total"
+    OPERATION_TIMEOUTS = "operation_timeouts_total"
+    STATE_REVOCATIONS = "state_revocations_total"
 
 
 class PrivacyStage(StrEnum):
+    ADMISSION = "admission"
+    OPERATION = "operation"
     CANONICALIZATION = "canonicalization"
     DETECTION = "detection"
     RISK = "risk"

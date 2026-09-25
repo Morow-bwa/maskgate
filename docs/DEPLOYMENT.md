@@ -34,11 +34,28 @@ The image runs as UID 10001 with no Linux capabilities. Compose adds a read-only
 ## Health endpoints
 
 - `/health/live`: process liveness.
-- `/health/ready`: configuration readiness; returns 503 when no real provider credential is configured. It does not make a provider network call.
+- `/health/ready`: local configuration/admission readiness; returns 503 while draining, saturated,
+  or when no real provider credential is configured. It deliberately does not make a provider
+  network call.
 
 ## Capacity and limits
 
-Rate limiting and conversation limits are in-process. The defaults are conservative demonstration values; tune body/file limits and OCR concurrency to the host. PDF rasterization and OCR are CPU- and memory-heavy, so preserve the container limits and keep `MEDIA_MAX_CONCURRENCY` low.
+Rate limiting is separate from in-process admission. Configure global, per-principal and
+per-operation count/byte budgets plus conversation retained-byte limits. The total operation
+deadline includes lock wait, provider I/O and response streaming. PDF rasterization and OCR are
+CPU- and memory-heavy, so preserve container limits and keep `MEDIA_MAX_CONCURRENCY` low. Coroutine
+cancellation cannot terminate native OCR already executing; the worker limiter is the execution
+bound.
+
+Conversation turns reserve a bounded worst-case retained-state delta before provider I/O. Commit
+replaces the reservation with actual accounted bytes; cancellation, failure and revocation release
+it with the lease.
+
+`STRICT_MEDIA_MEMORY=true` is the default. Startup raises Starlette's multipart spool threshold
+above the accepted media body bound, and the route rejects any accepted file that nevertheless
+reports disk rollover. Admission reserves the bounded upload/output envelope before parsing. Do not
+disable strict mode on Windows unless persistent temporary-file retention has been separately
+reviewed.
 
 ## Upgrade procedure
 

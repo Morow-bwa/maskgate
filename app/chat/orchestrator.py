@@ -4,34 +4,43 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from app.api import error_payload
 from app.config import Settings
 from app.identity import DefaultPrincipalResolver, PrincipalContext
 from app.masking.anonymizer import MaskingSession
 from app.masking.media_guard import UnsafeMediaBlocked, reject_unsanitized_media
 from app.policies.policy_engine import PolicyBlocked, PolicyEngine
+from app.privacy.approvals import ScopedApproval
 from app.privacy.models import PrivacyAction, TokenScope
 from app.privacy.output_guard import OutputPrivacyGuard
 from app.privacy.pipeline import PrivacyPipeline, ProviderOutputViolation
 from app.privacy.runtime import PrivacyRequestContext, PrivacyRuntime
 from app.privacy.wire import WirePrivacyViolation
-from app.proxy.llm_client import LLMUpstreamError
+from app.proxy.contracts import TransportCapabilities
+from app.proxy.llm_client import LLMUpstreamError, public_upstream_error
 from app.proxy.openai_compatible import add_masking_instruction, request_to_payload
 from app.proxy.outbound_sanitizer import sanitize_outbound_payload
 from app.proxy.streaming import BufferedStreamingOutputGuard
 from app.schemas import ChatCompletionRequest
 from app.storage.conversation_store import (
     ConversationCapacityExceeded,
+    ConversationLease,
+    ConversationLifecycleError,
+    ConversationLockTimeout,
+    ConversationMemoryCapacityExceeded,
+    ConversationModeMismatch,
     ConversationState,
     InMemoryConversationStore,
     validate_conversation_id,
 )
-from app.storage.mapping_store import InMemoryMappingStore
+from app.storage.mapping_store import InMemoryMappingStore, RequestMappingRevoked
 
 logger = logging.getLogger("maskgate")
 
@@ -49,11 +58,37 @@ class ChatExecution:
     trace: dict[str, object]
 
 
-def error_payload(message: str, error_type: str, **extra: object) -> dict[str, object]:
-    return {"error": {"message": message, "type": error_type, **extra}}
+class DeferredResponse(Response):
+    """Run streaming preflight only when the ASGI response is actually started."""
+
+    def __init__(self, factory: Callable[[], Awaitable[Response]]) -> None:
+        super().__init__(content=b"", status_code=200)
+        self._factory = factory
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        response = await self._factory()
+        await response(scope, receive, send)
 
 
-def _assistant_message_from_response(payload: Any) -> dict[str, Any] | None:
+class OwnedStreamingResponse(StreamingResponse):
+    """Close operation ownership even when streaming is cancelled before iteration."""
+
+    def __init__(self, *args: Any, cleanup: Callable[[], None], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._cleanup = cleanup
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._cleanup()
+
+
+def _assistant_message_from_response(
+    payload: Any,
+    *,
+    require_replayable: bool = False,
+) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     choices = payload.get("choices")
@@ -68,6 +103,8 @@ def _assistant_message_from_response(payload: Any) -> dict[str, Any] | None:
             preserved[key] = deepcopy(message[key])
     if len(preserved) == 1:
         return None
+    if require_replayable:
+        preserved = BufferedStreamingOutputGuard._replayable_history_message(preserved)
     return preserved
 
 
@@ -117,6 +154,7 @@ class ChatOrchestrator:
         privacy_pipeline: PrivacyPipeline,
         output_guard: OutputPrivacyGuard,
         principal_resolver: DefaultPrincipalResolver,
+        transport_capabilities: TransportCapabilities,
     ) -> None:
         self._settings = settings
         self._detector = detector
@@ -130,6 +168,7 @@ class ChatOrchestrator:
         self._privacy_pipeline = privacy_pipeline
         self._output_guard = output_guard
         self._principal_resolver = principal_resolver
+        self._transport_capabilities = transport_capabilities
 
     def _new_masking_session(self, mode: str) -> MaskingSession:
         return MaskingSession(
@@ -161,10 +200,12 @@ class ChatOrchestrator:
         allow_preview: bool = False,
     ) -> ChatExecution:
         try:
-            state = self._conversation_store.get_or_create(
+            lease = await self._conversation_store.begin_turn(
                 conversation_id,
                 principal.vault_namespace,
                 lambda: self._new_masking_session(requested_mode),
+                requested_mode=requested_mode,
+                timeout_seconds=self._settings.conversation_lock_timeout_seconds,
             )
         except ConversationCapacityExceeded:
             return ChatExecution(
@@ -175,7 +216,7 @@ class ChatOrchestrator:
                 ),
                 {"request_id": request_id, "masking_mode": requested_mode},
             )
-        if state.session.mode != requested_mode:
+        except ConversationModeMismatch:
             return ChatExecution(
                 409,
                 error_payload(
@@ -184,6 +225,16 @@ class ChatOrchestrator:
                 ),
                 {"request_id": request_id, "masking_mode": requested_mode},
             )
+        except ConversationLockTimeout:
+            return ChatExecution(
+                409,
+                error_payload(
+                    "The conversation is busy",
+                    "conversation_lock_timeout",
+                ),
+                {"request_id": request_id, "masking_mode": requested_mode},
+            )
+        state = lease.state
         base_trace: dict[str, object] = {
             "request_id": request_id,
             "masking_mode": requested_mode,
@@ -206,7 +257,7 @@ class ChatOrchestrator:
                 base_trace,
             )
 
-        async with state.lock:
+        async with lease:
             payload = request_to_payload(request)
             payload.pop("masking_mode", None)
             payload.pop("conversation_id", None)
@@ -230,7 +281,7 @@ class ChatOrchestrator:
                 )
             detected_types: list[str] = []
             allowlisted_types: list[str] = []
-            allowlisted_values: list[str] = []
+            allowlisted_values: list[ScopedApproval] = []
             session = state.session.clone()
             source_payload = deepcopy(payload)
             privacy_request = PrivacyRequestContext(
@@ -240,6 +291,7 @@ class ChatOrchestrator:
                 jurisdiction=self._settings.jurisdiction,
                 purpose=self._settings.default_purpose,
                 token_scope=TokenScope.CONVERSATION,
+                policy_revision=self._privacy_runtime.policy_revision,
             )
 
             def mask_message_at_path(text: str, path: tuple[str | int, ...]) -> str:
@@ -254,12 +306,10 @@ class ChatOrchestrator:
                 detected_types.extend(item.entity_type for item in result.detections)
                 allowlisted_types.extend(
                     detection.entity_type
-                    for detection, decision in zip(
-                        result.detections, result.decisions, strict=True
-                    )
+                    for detection, decision in zip(result.detections, result.decisions, strict=True)
                     if decision.action is PrivacyAction.ALLOW
                 )
-                allowlisted_values.extend(result.approved_originals)
+                allowlisted_values.extend(result.approvals)
                 return result.text
 
             def mask_message(text: str) -> str:
@@ -280,9 +330,31 @@ class ChatOrchestrator:
                     outbound_payload,
                     session,
                     allowlisted_values,
+                    principal=principal,
+                    request_context=privacy_request,
                 )
-                self._mapping_store.put(request_id, session.items)
+                safe_request_messages = self._output_guard.sanitize_for_history(
+                    deepcopy(payload.get("messages", [])),
+                    session.items,
+                )
+                if not isinstance(safe_request_messages, list):
+                    raise ProviderOutputViolation
+                lease.reserve_publish(
+                    session,
+                    deepcopy(state.messages) + safe_request_messages,
+                    self._settings.max_upstream_response_bytes,
+                )
+                request_mapping = self._mapping_store.put(request_id, session.items)
                 base_trace["masked_request"] = checked_payload.payload
+            except ConversationMemoryCapacityExceeded:
+                return ChatExecution(
+                    503,
+                    error_payload(
+                        "Conversation memory capacity is temporarily exhausted",
+                        "conversation_memory_capacity_exceeded",
+                    ),
+                    base_trace,
+                )
             except WirePrivacyViolation:
                 if not state.messages and not state.session.items:
                     self._conversation_store.delete(
@@ -335,9 +407,7 @@ class ChatOrchestrator:
                     block_secrets=False,
                     block_credit_cards=False,
                     public_email_allowlist=self._settings.public_email_allowlist,
-                    public_email_domain_allowlist=(
-                        self._settings.public_email_domain_allowlist
-                    ),
+                    public_email_domain_allowlist=(self._settings.public_email_domain_allowlist),
                     public_person_allowlist=self._settings.public_person_allowlist,
                 )
                 preview_session = state.session.clone(policy=preview_policy)
@@ -360,9 +430,7 @@ class ChatOrchestrator:
                     {
                         "detected_entity_types": unique_types,
                         "detected_entities_count": len(unique_types),
-                        "allowlisted_entity_types": list(
-                            dict.fromkeys(allowlisted_types)
-                        ),
+                        "allowlisted_entity_types": list(dict.fromkeys(allowlisted_types)),
                         "blocked_entities": list(dict.fromkeys(exc.entity_types)),
                         "masked_request": preview_outbound,
                         "preview_only": True,
@@ -402,9 +470,7 @@ class ChatOrchestrator:
                         {
                             "detected_entity_types": list(dict.fromkeys(detected_types)),
                             "detected_entities_count": len(detected_types),
-                            "allowlisted_entity_types": list(
-                                dict.fromkeys(allowlisted_types)
-                            ),
+                            "allowlisted_entity_types": list(dict.fromkeys(allowlisted_types)),
                             "preview_only": True,
                             "preview_reason": "provider_not_configured",
                             "provider_ready": False,
@@ -427,18 +493,12 @@ class ChatOrchestrator:
                         base_trace,
                     )
                 result = await self._privacy_pipeline.complete(checked_payload)
-                response_payload = self._privacy_pipeline.process_output(
-                    result.payload,
-                    session.items,
-                )
                 unique_types = list(dict.fromkeys(detected_types))
                 base_trace.update(
                     {
                         "detected_entity_types": unique_types,
                         "detected_entities_count": len(detected_types),
-                        "allowlisted_entity_types": list(
-                            dict.fromkeys(allowlisted_types)
-                        ),
+                        "allowlisted_entity_types": list(dict.fromkeys(allowlisted_types)),
                         "upstream_response": result.payload,
                         "latency_ms": _latency_ms(started),
                         "status_code": result.status_code,
@@ -446,24 +506,25 @@ class ChatOrchestrator:
                 )
                 if result.status_code < 400:
                     conversation_messages = deepcopy(state.messages)
-                    conversation_messages.extend(
-                        deepcopy(payload.get("messages", []))
-                    )
+                    conversation_messages.extend(safe_request_messages)
                     safe_history_payload = self._output_guard.sanitize_for_history(
                         result.payload,
                         session.items,
                     )
                     assistant_message = _assistant_message_from_response(
-                        safe_history_payload
+                        safe_history_payload,
+                        require_replayable=True,
                     )
                     if assistant_message is not None:
                         conversation_messages.append(assistant_message)
-                    self._conversation_store.commit(
-                        state,
-                        session,
-                        conversation_messages,
-                    )
+                    lease.commit(session, conversation_messages)
                     base_trace["conversation_message_count"] = len(state.messages)
+                lease.require_active()
+                self._mapping_store.require_active(request_mapping)
+                response_payload = self._privacy_pipeline.process_output(
+                    result.payload,
+                    session.items,
+                )
                 _log_request(
                     request_id=request_id,
                     model=request.model,
@@ -478,14 +539,31 @@ class ChatOrchestrator:
                     response_payload,
                     base_trace,
                 )
+            except ConversationMemoryCapacityExceeded:
+                return ChatExecution(
+                    503,
+                    error_payload(
+                        "Conversation memory capacity is temporarily exhausted",
+                        "conversation_memory_capacity_exceeded",
+                    ),
+                    base_trace,
+                )
+            except ConversationLifecycleError:
+                return ChatExecution(
+                    409,
+                    error_payload(
+                        "The conversation was revoked or changed",
+                        "conversation_revoked",
+                    ),
+                    base_trace,
+                )
             except (LLMUpstreamError, ProviderOutputViolation) as exc:
+                public_error_type, public_message = public_upstream_error(exc.error_type)
                 base_trace.update(
                     {
                         "detected_entity_types": list(dict.fromkeys(detected_types)),
                         "detected_entities_count": len(detected_types),
-                        "allowlisted_entity_types": list(
-                            dict.fromkeys(allowlisted_types)
-                        ),
+                        "allowlisted_entity_types": list(dict.fromkeys(allowlisted_types)),
                         "latency_ms": _latency_ms(started),
                         "status_code": 502,
                     }
@@ -498,17 +576,33 @@ class ChatOrchestrator:
                     policy_result="MASK" if session.items else "ALLOW",
                     latency_ms=_latency_ms(started),
                     status_code=502,
-                    error_type=exc.error_type,
+                    error_type=public_error_type,
                 )
                 return ChatExecution(
                     502,
-                    error_payload(exc.message, exc.error_type),
+                    error_payload(public_message, public_error_type),
                     base_trace,
                 )
             finally:
                 self._mapping_store.delete(request_id)
 
     async def stream_chat(
+        self,
+        request: ChatCompletionRequest,
+        conversation_id_override: str | None = None,
+        principal: PrincipalContext | None = None,
+        allow_mode_override: bool = False,
+    ) -> Response:
+        return DeferredResponse(
+            lambda: self._start_stream_chat(
+                request,
+                conversation_id_override,
+                principal,
+                allow_mode_override,
+            )
+        )
+
+    async def _start_stream_chat(
         self,
         request: ChatCompletionRequest,
         conversation_id_override: str | None = None,
@@ -547,6 +641,18 @@ class ChatOrchestrator:
                 ),
             )
         try:
+            if (
+                conversation_id_override
+                and request.conversation_id
+                and conversation_id_override != request.conversation_id
+            ):
+                return JSONResponse(
+                    status_code=422,
+                    content=error_payload(
+                        "Conflicting conversation identifiers are not allowed",
+                        "conflicting_conversation_id",
+                    ),
+                )
             conversation_id = validate_conversation_id(
                 conversation_id_override or request.conversation_id
             )
@@ -560,13 +666,17 @@ class ChatOrchestrator:
             )
 
         state: ConversationState | None = None
+        lease: ConversationLease | None = None
         if conversation_id:
             try:
-                state = self._conversation_store.get_or_create(
+                lease = await self._conversation_store.begin_turn(
                     conversation_id,
                     active_principal.vault_namespace,
                     lambda: self._new_masking_session(requested_mode),
+                    requested_mode=requested_mode,
+                    timeout_seconds=self._settings.conversation_lock_timeout_seconds,
                 )
+                state = lease.state
             except ConversationCapacityExceeded:
                 return JSONResponse(
                     status_code=503,
@@ -575,7 +685,7 @@ class ChatOrchestrator:
                         "conversation_capacity_exceeded",
                     ),
                 )
-            if state.session.mode != requested_mode:
+            except ConversationModeMismatch:
                 return JSONResponse(
                     status_code=409,
                     content=error_payload(
@@ -583,7 +693,14 @@ class ChatOrchestrator:
                         "conversation_mode_mismatch",
                     ),
                 )
-            await state.lock.acquire()
+            except ConversationLockTimeout:
+                return JSONResponse(
+                    status_code=409,
+                    content=error_payload(
+                        "The conversation is busy",
+                        "conversation_lock_timeout",
+                    ),
+                )
 
         payload = request_to_payload(request)
         payload.pop("masking_mode", None)
@@ -597,7 +714,8 @@ class ChatOrchestrator:
                         state.conversation_id,
                         state.owner_id,
                     )
-                state.lock.release()
+                if lease is not None:
+                    lease.close()
             return JSONResponse(
                 status_code=400,
                 content=error_payload(
@@ -606,12 +724,7 @@ class ChatOrchestrator:
                     media_type=exc.media_type,
                 ),
             )
-        session = (
-            state.session.clone()
-            if state is not None
-            else self._new_masking_session(requested_mode)
-        )
-        stream_allowlisted_values: list[str] = []
+        stream_allowlisted_values: list[ScopedApproval] = []
         source_payload = deepcopy(payload)
         privacy_request = PrivacyRequestContext(
             route="/v1/chat/completions",
@@ -619,13 +732,15 @@ class ChatOrchestrator:
             model=request.model,
             jurisdiction=self._settings.jurisdiction,
             purpose=self._settings.default_purpose,
-            token_scope=(
-                TokenScope.CONVERSATION
-                if state is not None
-                else TokenScope.REQUEST
-            ),
+            token_scope=(TokenScope.CONVERSATION if state is not None else TokenScope.REQUEST),
+            policy_revision=self._privacy_runtime.policy_revision,
         )
         try:
+            session = (
+                state.session.clone()
+                if state is not None
+                else self._new_masking_session(requested_mode)
+            )
 
             def mask_stream_text_at_path(
                 text: str,
@@ -639,7 +754,7 @@ class ChatOrchestrator:
                     json_path=path,
                     role=_role_for_path(source_payload, path),
                 )
-                stream_allowlisted_values.extend(result.approved_originals)
+                stream_allowlisted_values.extend(result.approvals)
                 return result.text
 
             def mask_stream_text(text: str) -> str:
@@ -660,8 +775,22 @@ class ChatOrchestrator:
                 outbound_payload,
                 session,
                 stream_allowlisted_values,
+                principal=active_principal,
+                request_context=privacy_request,
                 stream=True,
             )
+            if state is not None and lease is not None:
+                safe_request_messages = self._output_guard.sanitize_for_history(
+                    deepcopy(payload.get("messages", [])),
+                    session.items,
+                )
+                if not isinstance(safe_request_messages, list):
+                    raise ProviderOutputViolation("upstream_invalid_stream")
+                lease.reserve_publish(
+                    session,
+                    deepcopy(state.messages) + safe_request_messages,
+                    self._settings.max_upstream_response_bytes,
+                )
         except WirePrivacyViolation:
             if state is not None:
                 if not state.messages and not state.session.items:
@@ -669,7 +798,8 @@ class ChatOrchestrator:
                         state.conversation_id,
                         state.owner_id,
                     )
-                state.lock.release()
+                if lease is not None:
+                    lease.close()
             return JSONResponse(
                 status_code=400,
                 content=error_payload(
@@ -684,7 +814,8 @@ class ChatOrchestrator:
                         state.conversation_id,
                         state.owner_id,
                     )
-                state.lock.release()
+                if lease is not None:
+                    lease.close()
             return JSONResponse(
                 status_code=400,
                 content=error_payload(
@@ -693,10 +824,33 @@ class ChatOrchestrator:
                     entities=list(dict.fromkeys(exc.entity_types)),
                 ),
             )
+        except ConversationMemoryCapacityExceeded:
+            if lease is not None:
+                lease.close()
+            return JSONResponse(
+                status_code=503,
+                content=error_payload(
+                    "Conversation memory capacity is temporarily exhausted",
+                    "conversation_memory_capacity_exceeded",
+                ),
+            )
+        except Exception:
+            if lease is not None:
+                if not state.messages and not state.session.items:
+                    self._conversation_store.delete(state.conversation_id, state.owner_id)
+                lease.close()
+            self._mapping_store.delete(request_id)
+            return JSONResponse(
+                status_code=500,
+                content=error_payload(
+                    "The request could not be prepared safely",
+                    "internal_processing_error",
+                ),
+            )
 
-        if not hasattr(self._upstream, "complete_stream"):
-            if state is not None:
-                state.lock.release()
+        if not self._transport_capabilities.supports_streaming:
+            if lease is not None:
+                lease.close()
             return JSONResponse(
                 status_code=501,
                 content=error_payload(
@@ -705,41 +859,81 @@ class ChatOrchestrator:
                 ),
             )
 
-        self._mapping_store.put(request_id, session.items)
+        try:
+            request_mapping = self._mapping_store.put(request_id, session.items)
+        except Exception:
+            if lease is not None:
+                lease.close()
+            return JSONResponse(
+                status_code=500,
+                content=error_payload(
+                    "The request could not be prepared safely",
+                    "internal_processing_error",
+                ),
+            )
 
         async def event_generator():
             completed = False
             stream_output_guard = BufferedStreamingOutputGuard(
                 self._output_guard,
                 session.items,
+                require_replayable_history=state is not None,
             )
             try:
                 async for event in self._privacy_pipeline.stream(checked_payload):
+                    self._mapping_store.require_active(request_mapping)
+                    if lease is not None:
+                        lease.require_active()
                     safe_event = stream_output_guard.push(event)
                     yield f"data: {json.dumps(safe_event, ensure_ascii=False)}\n\n"
 
-                provider_text = stream_output_guard.provider_text()
-                for final_event in stream_output_guard.finish_events():
-                    yield f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
-                completed = True
-                if state is not None:
+                finalized = stream_output_guard.finalize()
+                self._mapping_store.require_active(request_mapping)
+                if state is not None and lease is not None:
+                    lease.require_active()
                     conversation_messages = deepcopy(state.messages)
-                    conversation_messages.extend(deepcopy(payload.get("messages", [])))
-                    if provider_text:
-                        conversation_messages.append(
-                            {"role": "assistant", "content": provider_text}
-                        )
-                    self._conversation_store.commit(state, session, conversation_messages)
+                    conversation_messages.extend(safe_request_messages)
+                    if finalized.history_message is not None:
+                        conversation_messages.append(finalized.history_message)
+                    lease.commit(session, conversation_messages)
+                completed = True
+                for final_event in finalized.events:
+                    self._mapping_store.require_active(request_mapping)
+                    if lease is not None:
+                        lease.require_active()
+                    yield f"data: {json.dumps(final_event, ensure_ascii=False)}\n\n"
+                self._mapping_store.require_active(request_mapping)
+                if lease is not None:
+                    lease.require_active()
                 yield "data: [DONE]\n\n"
+            except ConversationMemoryCapacityExceeded:
+                error_event = {
+                    "error": {
+                        "type": "conversation_memory_capacity_exceeded",
+                        "message": (
+                            "Conversation memory capacity is temporarily exhausted"
+                        ),
+                    }
+                }
+                yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            except (ConversationLifecycleError, RequestMappingRevoked):
+                error_event = {
+                    "error": {
+                        "type": "conversation_revoked",
+                        "message": "The conversation was revoked or changed",
+                    }
+                }
+                yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
             except (LLMUpstreamError, ProviderOutputViolation) as exc:
-                error_event = {"error": {"type": exc.error_type, "message": exc.message}}
+                public_error_type, public_message = public_upstream_error(exc.error_type)
+                error_event = {"error": {"type": public_error_type, "message": public_message}}
                 yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
             finally:
                 self._mapping_store.delete(request_id)
-                if state is not None:
+                if state is not None and lease is not None:
                     if not completed:
                         self._conversation_store.touch(state)
-                    state.lock.release()
+                    lease.close()
 
         headers = {
             "Cache-Control": "no-cache",
@@ -748,7 +942,12 @@ class ChatOrchestrator:
         }
         if conversation_id:
             headers["X-MaskGate-Conversation-ID"] = conversation_id
-        return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
+        return OwnedStreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers=headers,
+            cleanup=(lease.close if lease is not None else lambda: None),
+        )
 
     async def execute_chat(
         self,
@@ -797,6 +996,19 @@ class ChatOrchestrator:
                 },
             )
         try:
+            if (
+                conversation_id_override
+                and request.conversation_id
+                and conversation_id_override != request.conversation_id
+            ):
+                return ChatExecution(
+                    422,
+                    error_payload(
+                        "Conflicting conversation identifiers are not allowed",
+                        "conflicting_conversation_id",
+                    ),
+                    {"request_id": request_id, "masking_mode": requested_mode},
+                )
             conversation_id = validate_conversation_id(
                 conversation_id_override or request.conversation_id
             )
@@ -823,7 +1035,7 @@ class ChatOrchestrator:
         payload.pop("conversation_id", None)
         detected_types: list[str] = []
         allowlisted_types: list[str] = []
-        allowlisted_values: list[str] = []
+        allowlisted_values: list[ScopedApproval] = []
         session = self._new_masking_session(requested_mode)
         source_payload = deepcopy(payload)
         privacy_request = PrivacyRequestContext(
@@ -833,6 +1045,7 @@ class ChatOrchestrator:
             jurisdiction=self._settings.jurisdiction,
             purpose=self._settings.default_purpose,
             token_scope=TokenScope.REQUEST,
+            policy_revision=self._privacy_runtime.policy_revision,
         )
         base_trace: dict[str, object] = {
             "request_id": request_id,
@@ -881,12 +1094,10 @@ class ChatOrchestrator:
                 detected_types.extend(item.entity_type for item in result.detections)
                 allowlisted_types.extend(
                     detection.entity_type
-                    for detection, decision in zip(
-                        result.detections, result.decisions, strict=True
-                    )
+                    for detection, decision in zip(result.detections, result.decisions, strict=True)
                     if decision.action is PrivacyAction.ALLOW
                 )
-                allowlisted_values.extend(result.approved_originals)
+                allowlisted_values.extend(result.approvals)
                 return result.text
 
             def mask_message(text: str) -> str:
@@ -898,8 +1109,14 @@ class ChatOrchestrator:
                 mask_text_at_path=mask_message_at_path,
             )
             add_masking_instruction(payload, session.items)
-            checked_payload = self._privacy_pipeline.prepare(payload, session, allowlisted_values)
-            self._mapping_store.put(request_id, session.items)
+            checked_payload = self._privacy_pipeline.prepare(
+                payload,
+                session,
+                allowlisted_values,
+                principal=active_principal,
+                request_context=privacy_request,
+            )
+            request_mapping = self._mapping_store.put(request_id, session.items)
             base_trace["masked_request"] = checked_payload.payload
         except WirePrivacyViolation:
             base_trace.update(
@@ -1015,6 +1232,7 @@ class ChatOrchestrator:
                 )
                 return ChatExecution(200, _preview_response(request.model), base_trace)
             result = await self._privacy_pipeline.complete(checked_payload)
+            self._mapping_store.require_active(request_mapping)
             response_payload = self._privacy_pipeline.process_output(result.payload, session.items)
             unique_types = list(dict.fromkeys(detected_types))
             base_trace.update(
@@ -1038,6 +1256,7 @@ class ChatOrchestrator:
             )
             return ChatExecution(result.status_code, response_payload, base_trace)
         except (LLMUpstreamError, ProviderOutputViolation) as exc:
+            public_error_type, public_message = public_upstream_error(exc.error_type)
             base_trace.update(
                 {
                     "detected_entity_types": list(dict.fromkeys(detected_types)),
@@ -1055,9 +1274,13 @@ class ChatOrchestrator:
                 policy_result="MASK" if detected_types else "ALLOW",
                 latency_ms=_latency_ms(started),
                 status_code=502,
-                error_type=exc.error_type,
+                error_type=public_error_type,
             )
-            return ChatExecution(502, error_payload(exc.message, exc.error_type), base_trace)
+            return ChatExecution(
+                502,
+                error_payload(public_message, public_error_type),
+                base_trace,
+            )
         finally:
             # Request mappings are intentionally deleted even when the upstream
             # fails; TTL remains a second line of defense for abandoned flows.

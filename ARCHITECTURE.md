@@ -14,6 +14,9 @@ certified DLP product and it does not claim perfect PII detection.
    text and tool arguments until complete.
 6. Unknown encoded content, numeric user data, unsupported media, malformed output, and unsafe
    provider extensions fail closed on documented paths.
+7. Ingress, final-wire, and output boundaries implement one provider-independent
+   `PrivacyDetector` contract. Startup rejects terminal detectors with weaker profiles, thresholds,
+   semantics, recognizers, or entity coverage.
 
 ## Architectural vocabulary
 
@@ -43,7 +46,7 @@ Client
   -> sealed PrivacyCheckedPayload bytes
   -> built-in remote transport
   -> bounded and validated provider response / SSE
-  -> OutputPrivacyGuard
+  -> OutputPrivacyGuard (literal, token, and encoded-view inspection)
   -> authorized field-scoped rehydration
   -> Client
 ```
@@ -57,12 +60,17 @@ Built-in transports accept checked payloads; custom in-process test doubles rece
 | Boundary | Untrusted side | Enforced controls |
 |---|---|---|
 | Client -> MaskGate | body, headers, files | auth, principal resolution, host/rate/size limits |
+| Admission -> operation | concurrent work and RAM reservations | global/principal/operation budgets, total deadline, draining |
 | Request -> PrivacyRuntime | strings, keys, structures | bounded canonicalization, detection, risk, contextual policy |
 | Canonical IR -> Adapter | typed masked content | safe subset, cross-provider/unknown-field rejection |
 | Adapter -> provider | actual JSON body | target/token/encoded/numeric checks and sealed checked type |
 | Provider -> MaskGate | JSON and SSE | byte bounds, strict envelope/event parsing, output inspection |
 | Output guard -> client | content and tool data | new-PII redaction and authorized restoration |
 | Process memory -> host | originals and mappings | RAM lifetime, principal scoping, budgets, TTL and pruning |
+
+Conversation turns reserve their worst-case retained history/vault delta before provider I/O.
+Commit replaces that reservation with actual accounted bytes atomically; cancellation, revocation
+and failure release it with the owning lease.
 
 ## Sensitive-data Locality
 
@@ -82,6 +90,12 @@ sensitive percent or Unicode escapes, unsafe nested JSON, unclassified numeric v
 targets, and non-canonical JSON. Built-in transports send the returned bytes with `content=...` and
 do not serialize them again.
 
+Both terminal guards share bounded decoding in `app/privacy/encoded.py`, including JSON keys.
+Each string has a 64 KiB UTF-8 inspection budget and at most four decoded layers. Exceeding a
+budget rejects outbound data or redacts the provider field. Exact schema keywords and bounded
+protocol IDs at approved field paths bypass only the opaque-text heuristic, not direct detection.
+See `docs/agent/README.md` for the executable verification workflow and operating limits.
+
 ## Streaming and output
 
 The strict streaming Implementation buffers every supported text, refusal, legacy function
@@ -92,12 +106,25 @@ Provider output is inspected before restoration. Only active replacements in app
 restore originals. Unknown tokens and newly generated PII are redacted. Provider-safe history is
 stored before rehydration.
 
+Streaming finalization now returns separate client events and sanitized history. Accumulators use
+declared choice/tool indexes, not array positions; only semantic choice 0 is retained as history.
+Every observed choice must finish before finalization. Buffered content precedes finish markers,
+and a live generation/revision lease commits provider-safe history before final client events.
+Expiry cannot detach an active lease; deletion revokes later restoration and commit. A commit can
+precede a later client disconnect, so RAM commit and delivery are deliberately not atomic.
+
+Policy ALLOW decisions create request-local fingerprints bound to principal, application, route,
+provider, direction, purpose, policy revision, expiry, source path and serialized wire path.
+Ambiguous or unsupported provider translation rejects rather than widening an approval. Public
+ALLOW originals are sanitized before conversation retention, so historical approval is not stored.
+
 ## Provider independence
 
-The public route is OpenAI Chat Completions compatible. Runtime OpenAI-compatible Chat and Gemini
-`generateContent` paths have exact serialized-body tests. Responses, Anthropic, and Gemini
-Interactions Adapters are library-level until their response/transport integrations are complete.
-See `PROVIDERS.md`.
+The public routes are OpenAI Chat Completions compatible and expose a reviewed non-stream OpenAI
+Responses subset. Runtime OpenAI-compatible Chat, Gemini `generateContent`, and OpenAI Responses
+paths have exact serialized-body tests. Anthropic Messages and Gemini Interactions remain
+library-level Adapters until their response/transport integrations are complete. See
+`PROVIDERS.md`.
 
 ## Vault and tenancy
 
@@ -105,7 +132,8 @@ The current vault Implementation is single-process RAM. Principal namespaces are
 credentials without storing the credential. The same conversation ID under two credentials creates
 two isolated states. Mapping budgets, TTL, explicit deletion, and reference pruning minimize data.
 
-A future distributed vault requires authenticated encryption, tenant key separation, expiry,
+A tenant-scoped internal delete primitive removes all conversations and mappings owned by one
+pseudonymous principal scope. A future distributed vault requires authenticated encryption, tenant key separation, expiry,
 replay controls, bounded indexes, and a revised threat model. Plaintext Redis mappings are not an
 acceptable Implementation.
 
@@ -118,8 +146,10 @@ rejects opaque package content. OCR and face detection remain best effort and lo
 ## Privacy-safe observability
 
 The in-memory metrics Interface accepts enumerated metric/stage names and bounded taxonomy labels
-only. It cannot receive raw prompts, sensitive values, model IDs, credentials, mappings, file paths,
-or arbitrary labels.
+only. It includes fixed admission/state totals and bounded timing aggregates. Structured logs apply
+field-specific primitive grammars and never stringify arbitrary extra objects. Neither surface can
+receive raw prompts, sensitive values, model IDs, credentials, mappings, file paths, or arbitrary
+labels.
 
 ## Deployment
 

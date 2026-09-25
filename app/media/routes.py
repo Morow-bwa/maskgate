@@ -3,27 +3,65 @@ from __future__ import annotations
 from functools import partial
 
 import anyio
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.media.sanitizer import MediaSanitizer
-from app.media.types import MediaSanitizationError
+from app.media.types import MediaContext, MediaSanitizationError
 from app.policies.policy_engine import PolicyBlocked
 
 
-def build_media_router(sanitizer: MediaSanitizer, *, max_concurrency: int = 2) -> APIRouter:
+def build_media_router(
+    sanitizer: MediaSanitizer,
+    *,
+    max_concurrency: int = 2,
+    purpose: str = "general-assistance",
+    jurisdiction: str = "UNSPECIFIED",
+    policy_revision: str = "legacy",
+    strict_memory: bool = True,
+) -> APIRouter:
     router = APIRouter(prefix="/v1/privacy/files", tags=["privacy-files"])
     work_limiter = anyio.CapacityLimiter(max(max_concurrency, 1))
 
     @router.post("/anonymize")
-    async def anonymize_file(file: UploadFile = File(...)) -> Response:
+    async def anonymize_file(request: Request, file: UploadFile = File(...)) -> Response:
         try:
+            form = await request.form()
+            uploaded_files = [
+                value
+                for _, value in form.multi_items()
+                if isinstance(value, StarletteUploadFile)
+            ]
+            if len(uploaded_files) != 1 or uploaded_files[0] is not file:
+                raise MediaSanitizationError(
+                    "invalid_upload_count",
+                    "Exactly one uploaded file is required",
+                    400,
+                )
+            if strict_memory and bool(getattr(file.file, "_rolled", True)):
+                raise MediaSanitizationError(
+                    "volatile_storage_required",
+                    "Strict media mode requires in-memory multipart storage",
+                    503,
+                )
+            principal = request.state.principal
+            context = MediaContext(
+                principal_id=principal.vault_namespace,
+                tenant_id=principal.tenant_id,
+                application_id=principal.application_id,
+                purpose=purpose,
+                jurisdiction=jurisdiction,
+                route="/v1/privacy/files/anonymize",
+                policy_revision=policy_revision,
+            )
             content = await file.read(sanitizer.max_file_bytes + 1)
             work = partial(
                 sanitizer.sanitize,
                 content,
                 file.filename or "document",
                 file.content_type,
+                context=context,
             )
             result = await anyio.to_thread.run_sync(work, limiter=work_limiter)
         except MediaSanitizationError as exc:
@@ -55,6 +93,7 @@ def build_media_router(sanitizer: MediaSanitizer, *, max_concurrency: int = 2) -
                 "Cache-Control": "no-store",
                 "X-MaskGate-Redactions": str(result.redactions),
                 "X-MaskGate-Entity-Types": ",".join(result.entity_types),
+                "X-MaskGate-Upload-Storage": "memory" if strict_memory else "platform",
             },
         )
 

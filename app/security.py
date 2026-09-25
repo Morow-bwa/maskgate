@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import math
 import secrets
@@ -11,6 +12,14 @@ from typing import Any
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from app.application import (
+    AdmissionController,
+    GlobalCapacityExceeded,
+    OperationCapacityExceeded,
+    PrincipalCapacityExceeded,
+)
+from app.observability import PrivacyMetric, PrivacyMetrics, PrivacyStage
 
 PROTECTED_PATH_PREFIXES = (
     "/v1/",
@@ -172,3 +181,138 @@ class RequestBodyLimitMiddleware:
             headers={"Cache-Control": "no-store"},
         )
         await response(scope, receive, send)
+
+
+class AdmissionMiddleware:
+    """Hold an aggregate reservation through the complete ASGI response body."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        controller: AdmissionController,
+        *,
+        default_reservation_bytes: int,
+        media_reservation_bytes: int,
+        metrics: PrivacyMetrics | None = None,
+    ) -> None:
+        self.app = app
+        self.controller = controller
+        self.default_reservation_bytes = max(default_reservation_bytes, 1)
+        self.media_reservation_bytes = max(media_reservation_bytes, 1)
+        self.metrics = metrics
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not requires_proxy_auth(path):
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers", []))
+        authorization_bytes = headers.get(b"authorization")
+        authorization = (
+            authorization_bytes.decode("latin-1", errors="ignore")
+            if authorization_bytes is not None
+            else None
+        )
+        client = scope.get("client")
+        client_host = client[0] if isinstance(client, tuple) and client else None
+        identity = rate_limit_identity(client_host, authorization)
+        amount = (
+            self.media_reservation_bytes
+            if path == MEDIA_UPLOAD_PATH
+            else self.default_reservation_bytes
+        )
+        started = time.perf_counter()
+        try:
+            reservation = self.controller.reserve(identity, amount)
+        except OperationCapacityExceeded:
+            self._record_rejection("OPERATION")
+            await self._reject(scope, receive, send, 413, "operation_capacity_exceeded")
+            return
+        except PrincipalCapacityExceeded:
+            self._record_rejection("PRINCIPAL")
+            await self._reject(scope, receive, send, 429, "principal_capacity_exceeded")
+            return
+        except GlobalCapacityExceeded:
+            self._record_rejection("GLOBAL")
+            await self._reject(scope, receive, send, 503, "global_capacity_exceeded")
+            return
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            reservation.release()
+            if self.metrics is not None:
+                self.metrics.observe(PrivacyStage.ADMISSION, time.perf_counter() - started)
+
+    def _record_rejection(self, label: str) -> None:
+        if self.metrics is not None:
+            self.metrics.increment(PrivacyMetric.ADMISSION_REJECTIONS, taxonomy_label=label)
+
+    @staticmethod
+    async def _reject(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        status_code: int,
+        error_type: str,
+    ) -> None:
+        response = JSONResponse(
+            status_code=status_code,
+            content={
+                "error": {
+                    "message": "The request cannot be admitted within configured capacity",
+                    "type": error_type,
+                }
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+        await response(scope, receive, send)
+
+
+class OperationDeadlineMiddleware:
+    """Apply one absolute wall-clock bound to local work, lock wait, and provider I/O."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        timeout_seconds: float,
+        metrics: PrivacyMetrics | None = None,
+    ) -> None:
+        self.app = app
+        self.timeout_seconds = max(float(timeout_seconds), 0.001)
+        self.metrics = metrics
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not requires_proxy_auth(scope.get("path", "")):
+            await self.app(scope, receive, send)
+            return
+        response_started = False
+
+        async def tracked_send(message: dict[str, Any]) -> None:
+            nonlocal response_started
+            if message.get("type") == "http.response.start":
+                response_started = True
+            await send(message)
+
+        started = time.perf_counter()
+        try:
+            async with asyncio.timeout(self.timeout_seconds):
+                await self.app(scope, receive, tracked_send)
+        except TimeoutError:
+            if self.metrics is not None:
+                self.metrics.increment(PrivacyMetric.OPERATION_TIMEOUTS)
+            if response_started:
+                return
+            response = JSONResponse(
+                status_code=504,
+                content={
+                    "error": {
+                        "message": "The request exceeded its total execution deadline",
+                        "type": "operation_timeout",
+                    }
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+            await response(scope, receive, send)
+        finally:
+            if self.metrics is not None:
+                self.metrics.observe(PrivacyStage.OPERATION, time.perf_counter() - started)

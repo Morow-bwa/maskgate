@@ -1,0 +1,370 @@
+{
+  "category": "quality",
+  "groups": [
+    {
+      "id": "q-ru-person",
+      "locale": "ru-RU",
+      "entity_type": "PERSON",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "Контактное лицо: {value} подтвердило запрос.",
+        "Клиент {value} ожидает ответа.",
+        "Заявка назначена сотруднику {value}."
+      ],
+      "values": [
+        "Александр Соколов", "Алексей Морозов", "Анна Кузнецова",
+        "Дарья Волкова", "Дмитрий Орлов", "Екатерина Лебедева",
+        "Елена Новикова", "Иван Петров", "Мария Попова",
+        "Михаил Фёдоров", "Наталья Павлова", "Сергей Воронов"
+      ]
+    },
+    {
+      "id": "q-uk-person",
+      "locale": "uk-UA",
+      "entity_type": "PERSON",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "Контактна особа: {value} підтвердила звернення.",
+        "Клієнт {value} очікує відповіді.",
+        "Запит призначено співробітнику {value}."
+      ],
+      "values": [
+        "Андрій Коваленко", "Анна Мельник", "Богдан Шевченко",
+        "Вікторія Бондар", "Дарина Ткаченко", "Дмитро Кравченко",
+        "Іван Олійник", "Катерина Поліщук", "Марія Лисенко",
+        "Микола Марченко", "Наталія Савченко", "Олена Романюк"
+      ]
+    },
+    {
+      "id": "q-en-person",
+      "locale": "en-US",
+      "entity_type": "PERSON",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "Contact person: {value} confirmed the request.",
+        "Customer {value} is waiting for a reply.",
+        "The case was assigned to employee {value}."
+      ],
+      "values": [
+        "Alice Johnson", "Amelia Clark", "Daniel Harris", "Emily Lewis",
+        "Ethan Walker", "Grace Hall", "Henry Young", "James Allen",
+        "John Carter", "Mary King", "Olivia Wright", "Sophia Green"
+      ]
+    },
+    {
+      "id": "q-ru-org",
+      "locale": "ru-RU",
+      "entity_type": "ORG",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "Договор подписало {value} вчера.",
+        "Работодатель {value} направил письмо.",
+        "Платёж получен от {value}."
+      ],
+      "values": [
+        "ООО «Северный Ветер»", "АО Альфа Системы", "ПАО Городской Свет",
+        "НКО Добрый Мост", "ФГУП Почтовый Центр", "ООО Тихая Гавань",
+        "АО Новая Линия", "ПАО Зеленая Энергия", "НКО Открытый Дом",
+        "ООО Медные Технологии"
+      ]
+    },
+    {
+      "id": "q-uk-org",
+      "locale": "uk-UA",
+      "entity_type": "ORG",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "Угоду підписало {value} вчора.",
+        "Роботодавець {value} надіслав листа.",
+        "Платіж отримано від {value}."
+      ],
+      "values": [
+        "ТОВ «Північний Вітер»", "АТ Дніпровські Системи", "ПАТ Міське Світло",
+        "ГО Добрий Міст", "ДП Поштовий Центр", "ТОВ Тиха Гавань",
+        "АТ Нова Лінія", "ПАТ Зелена Енергія", "ГО Відкритий Дім",
+        "ТОВ Мідні Технології"
+      ]
+    },
+    {
+      "id": "q-en-org",
+      "locale": "en-GB",
+      "entity_type": "ORG",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "The agreement was signed by {value} yesterday.",
+        "Employer {value} sent the letter.",
+        "Payment was received from {value}."
+      ],
+      "values": [
+        "Northwind Analytics Ltd", "Contoso Research LLC", "Fabrikam Health Inc",
+        "Alpine Data Limited", "Blue Yonder PLC", "Litware Systems Corp",
+        "Tailspin Energy LLP", "Woodgrove Finance Ltd", "Proseware Labs LLC",
+        "Adventure Works Incorporated"
+      ]
+    },
+    {
+      "id": "q-ru-location",
+      "locale": "ru-RU",
+      "entity_type": "LOCATION",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "Клиент живёт в городе {value}.",
+        "Место встречи: {value}.",
+        "Доставка запланирована в {value}."
+      ],
+      "values": [
+        "Владивосток", "Екатеринбург", "Казань", "Москва",
+        "Московская область", "Нижний Новгород", "Новосибирск",
+        "Ростов-на-Дону", "Самара", "Санкт-Петербург"
+      ]
+    },
+    {
+      "id": "q-uk-location",
+      "locale": "uk-UA",
+      "entity_type": "LOCATION",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "Клієнт живе у місті {value}.",
+        "Місце зустрічі: {value}.",
+        "Доставку заплановано до {value}."
+      ],
+      "values": [
+        "Вінниця", "Дніпро", "Запоріжжя", "Івано-Франківськ", "Київ",
+        "Київська область", "Львів", "Одеса", "Полтава", "Харків"
+      ]
+    },
+    {
+      "id": "q-en-location",
+      "locale": "en-US",
+      "entity_type": "LOCATION",
+      "tags": ["positive", "multilingual"],
+      "templates": [
+        "The customer lives in {value}.",
+        "Meeting location: {value}.",
+        "Delivery is scheduled for {value}."
+      ],
+      "values": [
+        "Birmingham", "Bristol", "California", "Chicago", "Edinburgh",
+        "London", "Manchester", "New York", "San Francisco", "Seattle"
+      ]
+    },
+    {
+      "id": "q-ru-address",
+      "locale": "ru-RU",
+      "entity_type": "POSTAL_ADDRESS",
+      "tags": ["positive", "multilingual", "structured", "valid"],
+      "templates": [
+        "Адрес доставки: {value}.",
+        "В профиле указан адрес {value}.",
+        "Курьеру передали: {value}."
+      ],
+      "values": [
+        "улица Тверская, дом 10", "ул. Лесная, д. 7", "проспект Мира, дом 25",
+        "пр-т Победы, д. 18", "переулок Садовый, дом 4", "пер. Школьный, д. 9",
+        "улица Новая, дом 12, кв. 8", "ул. Полевая, д. 3, офис 5"
+      ]
+    },
+    {
+      "id": "q-uk-address",
+      "locale": "uk-UA",
+      "entity_type": "POSTAL_ADDRESS",
+      "tags": ["positive", "multilingual", "structured", "valid"],
+      "templates": [
+        "Адреса доставки: {value}.",
+        "У профілі вказано адресу {value}.",
+        "Кур'єру передали: {value}."
+      ],
+      "values": [
+        "вулиця Хрещатик, будинок 10", "вул. Лісова, буд. 7",
+        "проспект Перемоги, будинок 25", "пр-т Свободи, буд. 18",
+        "провулок Садовий, будинок 4", "пров. Шкільний, буд. 9",
+        "вулиця Нова, будинок 12, кв. 8", "вул. Польова, буд. 3, офіс 5"
+      ]
+    },
+    {
+      "id": "q-en-address",
+      "locale": "en-GB",
+      "entity_type": "POSTAL_ADDRESS",
+      "tags": ["positive", "multilingual", "structured", "valid"],
+      "templates": [
+        "Delivery address: {value}.",
+        "The profile contains the address {value}.",
+        "The courier received: {value}."
+      ],
+      "values": [
+        "221B Baker Street", "14 Cedar Road", "8 Orchard Avenue",
+        "31 Willow Lane", "5 Harbor Drive", "77 Sunrise Boulevard",
+        "10 King Street, Apt 4", "42 Queen Road, Suite 5"
+      ]
+    },
+    {
+      "id": "q-ru-dob",
+      "locale": "ru-RU",
+      "entity_type": "DOB",
+      "tags": ["positive", "multilingual", "structured", "valid"],
+      "templates": [
+        "Дата рождения: {value}.",
+        "Клиент родился {value}.",
+        "В анкете указана дата рождения — {value}."
+      ],
+      "values": [
+        "1 января 1980", "2 февраля 1981", "3 марта 1982", "4 апреля 1983",
+        "5 мая 1984", "6 июня 1985", "7 июля 1986", "8 августа 1987",
+        "9 сентября 1988", "10 октября 1989", "11 ноября 1990", "12 декабря 1991"
+      ]
+    },
+    {
+      "id": "q-uk-dob",
+      "locale": "uk-UA",
+      "entity_type": "DOB",
+      "tags": ["positive", "multilingual", "structured", "valid"],
+      "templates": [
+        "Дата народження: {value}.",
+        "Клієнт народився {value}.",
+        "В анкеті зазначено дату народження — {value}."
+      ],
+      "values": [
+        "1 січня 1980", "2 лютого 1981", "3 березня 1982", "4 квітня 1983",
+        "5 травня 1984", "6 червня 1985", "7 липня 1986", "8 серпня 1987",
+        "9 вересня 1988", "10 жовтня 1989", "11 листопада 1990", "12 грудня 1991"
+      ]
+    },
+    {
+      "id": "q-en-dob",
+      "locale": "en-GB",
+      "entity_type": "DOB",
+      "tags": ["positive", "multilingual", "structured", "valid"],
+      "templates": [
+        "Date of birth: {value}.",
+        "The customer was born on {value}.",
+        "The form lists the birth date — {value}."
+      ],
+      "values": [
+        "1 January 1980", "2 February 1981", "3 March 1982", "4 April 1983",
+        "5 May 1984", "6 June 1985", "7 July 1986", "8 August 1987",
+        "9 September 1988", "10 October 1989", "11 November 1990", "12 December 1991"
+      ]
+    },
+    {
+      "id": "q-hard-negative",
+      "locale": "und",
+      "entity_type": null,
+      "tags": ["negative", "hard-negative", "structured", "invalid"],
+      "expected_values": [
+        {"type": "CARD_NUMBER", "value": "4111 1111 1111 1112"},
+        {"type": "INN", "value": "7707083894"},
+        {"type": "MONEY", "value": "5000 dollars"},
+        {"type": "PASSPORT", "value": "4510 123456"},
+        {"type": "PASSPORT", "value": "9999 999999"},
+        {"type": "DOMAIN", "value": "chat.completion.chunk"},
+        {"type": "DOMAIN", "value": "example.invalid"},
+        {"type": "FILE_PATH", "value": "/docs/privacy/overview"},
+        {"type": "FILE_PATH", "value": "C:\\docs\\privacy.txt"},
+        {"type": "LOCATION", "value": "London"},
+        {"type": "LOCATION", "value": "Москва"},
+        {"type": "LOCATION", "value": "Київ"}
+      ],
+      "templates": ["{value}"],
+      "values": [
+        "Release version 12.14.2026 passed the compatibility suite.",
+        "Order 1234567890 is not a telephone number.",
+        "Build 4510 123456 is a synthetic job identifier.",
+        "Card-shaped sample 4111 1111 1111 1112 has an invalid checksum.",
+        "ИНН 7707083894 intentionally fails validation.",
+        "IBAN GB82 WEST 1234 5698 7654 33 is checksum-invalid.",
+        "Date of birth: 31 February 2001 is impossible.",
+        "Дата рождения: 31 февраля 2001 невозможна.",
+        "Дата народження: 31 лютого 2001 неможлива.",
+        "The phrase Quarterly Privacy Review is a document title.",
+        "Фраза Новая Политика является заголовком документа.",
+        "Фраза Нова Політика є заголовком документа.",
+        "Reading improves engineering judgement.",
+        "Mobile applications need accessibility testing.",
+        "Nice results require reproducible evaluation.",
+        "May Report is the name of a monthly document.",
+        "ООО alone is only a legal-form abbreviation here.",
+        "LLC appears in the glossary without an organization name.",
+        "ТОВ наведено як скорочення організаційної форми.",
+        "Street 10 is not a complete postal address.",
+        "улица без названия и номера не является адресом.",
+        "вулиця без назви та номера не є адресою.",
+        "The value 192.0.2.999 is not an IPv4 address.",
+        "The value 2001:db8::zz is not an IPv6 address.",
+        "Three dotted labels aaaaaaaa.bbbbbbbb.signature are not a JWT.",
+        "Correlation ID 987e6543-e21b-12d3-a456-426614174111 is protocol metadata.",
+        "chat.completion.chunk is protocol metadata.",
+        "example.invalid is a reserved domain used in documentation.",
+        "The amount 5000 dollars is financial data, not a phone.",
+        "Iteration 202608131234 should remain an internal build number.",
+        "Sequence 0000000000 is a test counter.",
+        "Reference 112-233-445 96 fails the SNILS checksum.",
+        "Reference 500100732258 fails the INN checksum.",
+        "The string 9999 999999 is a deliberately impossible passport-like fixture.",
+        "API key equals replace-me in the installation guide.",
+        "Password equals changeme in the sample configuration.",
+        "The slash path /docs/privacy/overview is public documentation.",
+        "C:\\docs\\privacy.txt is a documentation fixture.",
+        "The value user at example dot com is not an email address.",
+        "The text plus seven nine one six is not a phone number.",
+        "A 40-49 age band is generalized data, not a birth date.",
+        "August 1983 lacks a precise day and is not a DOB in this corpus.",
+        "1983 alone is not a date of birth.",
+        "Northwind Analytics without a legal suffix is ambiguous prose.",
+        "Северный Ветер без правовой формы является названием проекта.",
+        "Північний Вітер без правової форми є назвою проєкту.",
+        "Contact person field is optional and currently empty.",
+        "Контактное лицо не указано в этой форме.",
+        "Контактна особа не зазначена в цій формі.",
+        "London style is a typography label in this sentence.",
+        "Москва is discussed as a public geographic fact.",
+        "Київ згадано як загальновідому географічну назву.",
+        "Unit 4 is not a standalone address.",
+        "кв. 8 без улицы и дома не является адресом.",
+        "кв. 8 без вулиці та будинку не є адресою.",
+        "DOB label without a following value should not match.",
+        "Дата рождения без значения не должна совпадать.",
+        "Дата народження без значення не повинна збігатися.",
+        "This final ordinary sentence contains no sensitive entity."
+      ]
+    },
+    {
+      "id": "q-en-obfuscated-person",
+      "locale": "en-US",
+      "entity_type": "PERSON",
+      "tags": ["positive", "multilingual", "obfuscated"],
+      "templates": ["Contact person: {value} confirmed the request."],
+      "values": [
+        "A\u200blice Johnson", "Am\u200belia Clark", "Dan\u200biel Harris",
+        "Em\u200bily Lewis", "Eth\u200ban Walker", "Gr\u200bace Hall",
+        "Hen\u200bry Young", "Ja\u200bmes Allen", "Jo\u200bhn Carter",
+        "Ma\u200bry King", "Oli\u200bvia Wright", "So\u200bphia Green"
+      ]
+    },
+    {
+      "id": "q-ru-obfuscated-person",
+      "locale": "ru-RU",
+      "entity_type": "PERSON",
+      "tags": ["positive", "multilingual", "obfuscated"],
+      "templates": ["Контактное лицо: {value} подтвердило запрос."],
+      "values": [
+        "А\u200bлександр Соколов", "А\u200bлексей Морозов", "А\u200bнна Кузнецова",
+        "Д\u200bарья Волкова", "Д\u200bмитрий Орлов", "Е\u200bкатерина Лебедева",
+        "Е\u200bлена Новикова", "И\u200bван Петров", "М\u200bария Попова",
+        "М\u200bихаил Фёдоров", "Н\u200bаталья Павлова", "С\u200bергей Воронов"
+      ]
+    },
+    {
+      "id": "q-uk-obfuscated-person",
+      "locale": "uk-UA",
+      "entity_type": "PERSON",
+      "tags": ["positive", "multilingual", "obfuscated"],
+      "templates": ["Контактна особа: {value} підтвердила звернення."],
+      "values": [
+        "А\u200bндрій Коваленко", "А\u200bнна Мельник", "Б\u200bогдан Шевченко",
+        "В\u200bікторія Бондар", "Д\u200bарина Ткаченко", "Д\u200bмитро Кравченко",
+        "І\u200bван Олійник", "К\u200bатерина Поліщук", "М\u200bарія Лисенко",
+        "М\u200bикола Марченко", "Н\u200bаталія Савченко", "О\u200bлена Романюк"
+      ]
+    }
+  ]
+}

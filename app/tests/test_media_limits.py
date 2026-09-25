@@ -107,7 +107,14 @@ def test_docx_rejects_duplicate_zip_entries(redactor: TextRedactor) -> None:
 
 def test_docx_rejects_entry_count_over_budget(redactor: TextRedactor) -> None:
     sanitizer = DocxSanitizer(redactor, max_entries=3)
-    payload = _docx((("word/styles.xml", b"<w:styles xmlns:w='urn:test'/>",),))
+    payload = _docx(
+        (
+            (
+                "word/styles.xml",
+                b"<w:styles xmlns:w='urn:test'/>",
+            ),
+        )
+    )
 
     with pytest.raises(MediaSanitizationError, match="too many ZIP entries") as exc_info:
         sanitizer.sanitize(payload, "too-many-parts.docx")
@@ -127,9 +134,7 @@ def test_docx_rejects_uncompressed_content_over_budget(redactor: TextRedactor) -
 def test_docx_rejects_unsafe_compression_ratio(redactor: TextRedactor) -> None:
     sanitizer = DocxSanitizer(redactor, max_compression_ratio=2)
     compressible_xml = (
-        b"<w:styles xmlns:w='urn:test'><w:name w:val='"
-        + (b"A" * 16_384)
-        + b"'/></w:styles>"
+        b"<w:styles xmlns:w='urn:test'><w:name w:val='" + (b"A" * 16_384) + b"'/></w:styles>"
     )
     payload = _docx((("word/styles.xml", compressible_xml),))
 
