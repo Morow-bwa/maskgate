@@ -2,7 +2,7 @@ FROM node:22-alpine AS playground-build
 
 WORKDIR /frontend
 
-RUN corepack enable && corepack prepare pnpm@11.16.0 --activate
+RUN npm install --global pnpm@11.16.0
 COPY playground-react/package.json playground-react/pnpm-lock.yaml playground-react/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY playground-react/ ./
