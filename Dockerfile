@@ -8,7 +8,7 @@ RUN pnpm install --frozen-lockfile
 COPY playground-react/ ./
 RUN pnpm build
 
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
