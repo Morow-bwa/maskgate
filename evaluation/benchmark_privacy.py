@@ -55,6 +55,7 @@ def benchmark(iterations: int) -> dict[str, object]:
         jurisdiction="unspecified",
         purpose="performance_test",
         token_scope=TokenScope.REQUEST,
+        policy_revision=runtime.policy_revision,
     )
 
     def transform() -> object:
